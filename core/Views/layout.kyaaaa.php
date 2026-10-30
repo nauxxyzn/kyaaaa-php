@@ -19,9 +19,7 @@ $asset = static function (string $file): string {
     <?= csrf()->metaTag() ?>
     <title><?= esc($title ?? 'Kyaaaa-PHP') ?></title>
     <script>try{var t=localStorage.getItem('kyaaaa-theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}</script>
-    <link href="<?= $asset('assets/css/bootstrap.min.css') ?>" rel="stylesheet">
     <link href="<?= $asset('assets/css/kyaaaa.css') ?>" rel="stylesheet">
-    <script src="<?= $asset('assets/js/turbolinks.min.js') ?>"></script>
     <script src="<?= $asset('assets/js/kyaaaa.js') ?>" defer></script>
 </head>
 <body class="k-body">
@@ -30,8 +28,8 @@ $asset = static function (string $file): string {
     <header class="k-nav">
         <div class="k-wrap k-nav-inner">
             <a class="k-brand" href="<?= esc(url()) ?>" aria-label="Kyaaaa-PHP home">Kyaaaa<span>~</span></a>
-            <button class="k-burger" type="button" data-bs-toggle="collapse" data-bs-target="#kMenu" aria-controls="kMenu" aria-expanded="false" aria-label="Toggle menu"><span></span></button>
-            <nav class="collapse k-menu" id="kMenu" aria-label="Main">
+            <button class="k-burger" type="button" data-menu-toggle aria-controls="kMenu" aria-expanded="false" aria-label="Toggle menu"><span></span></button>
+            <nav class="k-menu" id="kMenu" aria-label="Main">
                 <a href="<?= esc(url()) ?>"<?= $segment === '' ? ' aria-current="page"' : '' ?>>Home</a>
                 <a href="<?= esc(url('docs')) ?>"<?= $segment === 'docs' ? ' aria-current="page"' : '' ?>>Docs</a>
                 <a href="https://github.com/naufkia/kyaaaa-php" rel="noopener">GitHub</a>
@@ -52,7 +50,5 @@ $asset = static function (string $file): string {
             </nav>
         </div>
     </footer>
-
-    <script src="<?= $asset('assets/js/bootstrap.bundle.min.js') ?>"></script>
 </body>
 </html>

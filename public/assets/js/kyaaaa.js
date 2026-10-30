@@ -99,6 +99,16 @@
       return;
     }
 
+    var menuButton = target.closest('[data-menu-toggle]');
+    if (menuButton) {
+      var menu = document.getElementById(menuButton.getAttribute('aria-controls'));
+      if (menu) {
+        var open = menu.classList.toggle('is-open');
+        menuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+      return;
+    }
+
     if (target.closest('[data-theme-toggle]')) {
       var root = document.documentElement;
       var current = root.getAttribute('data-theme')
@@ -138,5 +148,4 @@
   }
 
   boot();
-  document.addEventListener('turbolinks:load', boot);
 })();
