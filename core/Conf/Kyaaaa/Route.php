@@ -1,149 +1,235 @@
-<?php namespace Core\Conf\Kyaaaa;
+<?php
 
-class Route{
-    private string $_path;
-    private $callable;
-    private array $_matches;
-    private array $_params;
-    private array $_get_params, $middleware_tab;
-    private bool $middleware_exist;
-    /**
-     * @var mixed|null
-     */
-    function __construct(string $path, $callable)
+declare(strict_types=1);
+
+namespace Core\Conf\Kyaaaa;
+
+use LogicException;
+
+class Route
+{
+    private string $path;
+
+    /** @var mixed controller callable, [Class::class, 'method'] or "Class#method" */
+    private mixed $callable;
+
+    /** @var list<mixed> */
+    private array $middleware = [];
+
+    /** @var array<string, string> custom regex per parameter (see with()) */
+    private array $constraints = [];
+
+    /** @var list<string> */
+    private array $paramNames = [];
+
+    private ?string $regex = null;
+
+    /** @var list<string> */
+    private array $matches = [];
+
+    public function __construct(string $path, mixed $callable)
     {
-        $this->_path = trim($path, '/');
+        $this->path = trim($path, '/');
         $this->callable = $callable;
-        $this->_matches = [];
-        $this->_params = [];
-        $this->_get_params = [];
-        $this->middleware_tab = [];
-        $this->middleware_exist = false;
     }
 
     /**
-     * @param string|null $url
-     * @return bool
+     * Side-effect free check: does this route match the URL path?
      */
-    function match(?string $url): bool
+    public function test(?string $url): bool
     {
-        $url = trim($url, '/');
-        $path = preg_replace_callback('#:([\w]+)#', [$this, 'paramMatch'], $this->_path);
-        $regex = "#^$path$#i";
-        if (!preg_match($regex, $url, $matches)) {
+        return preg_match($this->compile(), trim((string) $url, '/')) === 1;
+    }
+
+    /**
+     * Match the URL path and remember the route parameters.
+     */
+    public function match(?string $url): bool
+    {
+        if (preg_match($this->compile(), trim((string) $url, '/'), $found) !== 1) {
             return false;
         }
-        array_shift($matches);
-        array_shift($_GET);
-        $this->_matches = $matches;
-        foreach ($matches as $key => $val) {
-            $_GET[$this->_get_params[$key]] = $val;
+
+        array_shift($found);
+        $this->matches = array_values($found);
+
+        // Route parameters are also exposed through $_GET (and win over a
+        // query-string parameter with the same name).
+        foreach ($this->paramNames as $i => $name) {
+            if (isset($this->matches[$i])) {
+                $_GET[$name] = $this->matches[$i];
+            }
         }
+
         return true;
     }
 
     /**
+     * Run the middleware (in order), then the route handler. A middleware stops
+     * the request by throwing (e.g. HttpException) or by returning false.
+     */
+    public function call(): mixed
+    {
+        foreach ($this->middleware as $middleware) {
+            if ($this->invoke($middleware) === false) {
+                throw new HttpException(403, 'Forbidden');
+            }
+        }
+
+        return $this->invoke($this->callable);
+    }
+
+    /**
+     * Restrict a parameter with a regular expression, e.g. ->with('id', '\d+').
+     */
+    public function with(string $param, string $regex): static
+    {
+        // Inner capture groups would shift the parameter positions.
+        $this->constraints[$param] = (string) preg_replace('/(?<!\\\\)\((?!\?)/', '(?:', $regex);
+        $this->regex = null;
+
+        return $this;
+    }
+
+    /** @return list<string> */
+    public function getmatch(): array
+    {
+        return $this->matches;
+    }
+
+    /**
+     * Build the path for this route, e.g. getUrl(['id' => 5]) -> "items/5".
      *
+     * @param array<string, scalar> $params
      */
-    function call()
+    public function getUrl(array $params = []): string
     {
-        try {
-            if (count($this->middleware_tab) > 0) {
-                $this->middleware_exist = false;
-                foreach ($this->middleware_tab as $middleware) {
-                    $this->controllerMiddleware($middleware, true);
-                }
-                $this->middleware_tab = [];
+        return (string) preg_replace_callback(
+            '/:(\w+)/',
+            static fn(array $m): string => isset($params[$m[1]]) ? rawurlencode((string) $params[$m[1]]) : $m[0],
+            $this->path
+        );
+    }
+
+    public function middleware(mixed $middleware): static
+    {
+        $this->middleware[] = $middleware;
+
+        return $this;
+    }
+
+    /**
+     * Require a valid CSRF token for this route (POST field or X-CSRF-Token header).
+     */
+    public function csrf(): static
+    {
+        return $this->middleware(static function (): void {
+            if (!\csrf()->isValidRequest()) {
+                throw new HttpException(419, 'Page Expired');
             }
-            $this->controllerMiddleware($this->callable);
-        } catch (\Exception $ex) {
-            echo $ex->getMessage();
+        });
+    }
+
+    /**
+     * Summary of the route for the development tools.
+     *
+     * @return array{method: string, path: string, handler: string, params: array<string, string>, middleware: int}
+     */
+    public function describe(string $method = ''): array
+    {
+        $params = [];
+        foreach ($this->paramNames as $i => $name) {
+            if (isset($this->matches[$i])) {
+                $params[$name] = $this->matches[$i];
+            }
         }
+
+        return [
+            'method' => $method,
+            'path' => '/' . $this->path,
+            'handler' => $this->handlerLabel(),
+            'params' => $params,
+            'middleware' => count($this->middleware),
+        ];
     }
 
-    /**
-     * @param array $match
-     * @return string
-     */
-    private function paramMatch(array $match): string
+    private function handlerLabel(): string
     {
-        if (isset($this->_params[$match[1]])) {
-            return '(' . $this->_params[$match[1]] . ')';
+        $handler = $this->callable;
+
+        if (is_string($handler)) {
+            return $handler;
         }
-        array_push($this->_get_params, $match[1]);
-        return '([^/]+)';
-    }
+        if (is_array($handler) && count($handler) === 2) {
+            $class = is_object($handler[0]) ? $handler[0]::class : (string) $handler[0];
 
-    /**
-     * @param $param
-     * @param $regex
-     * @return $this
-     */
-    function with($param, $regex): Route
-    {
-        $this->_params[$param] = str_replace('(', '(?:', $regex);
-        return $this;
-    }
-
-    /**
-     * @return array
-     */
-    function getmatch(): array
-    {
-        return $this->_matches;
-    }
-
-    /**
-     * @param $params
-     * @return array|string|string[]
-     */
-    function getUrl($params)
-    {
-        $path = $this->_path;
-        foreach ($params as $k => $v) {
-            $path = str_replace(":$k", $v, $path);
+            return $class . '::' . (string) $handler[1] . '()';
         }
-        return $path;
+        if ($handler instanceof \Closure) {
+            return 'Closure';
+        }
+
+        return get_debug_type($handler);
     }
 
-    /**
-     * @param  $middleware
-     * @return $this
-     */
-    function middleware($middleware): Route
+    private function compile(): string
     {
-        $this->middleware_tab[] = $middleware;
-        return $this;
-    }
+        if ($this->regex !== null) {
+            return $this->regex;
+        }
 
-    /**
-     * @param $callable
-     * @param bool $is_middleware
-     */
-    private function controllerMiddleware($callable, bool $is_middleware = false): void
-    {
-        try {
-            if (is_string($callable) || is_array($callable)) {
-                $params = is_string($callable) ? explode('#', $callable) : $callable;
-                if (count($params) != 2) {
-                    throw new \Exception("Error : on class/method is not well defined");
-                }
-                $class_name = $params[0];
-                $class_method = $params[1];
-                $class_instance = new $class_name;
-                if (!method_exists($class_instance, $class_method)) {
-                    throw new \Exception("method : $class_method does not belong the class : $class_name.");
-                }
-                call_user_func_array([$class_instance, $class_method], $this->_matches);
+        $this->paramNames = [];
+        $pieces = preg_split('/(:\w+)/', $this->path, -1, PREG_SPLIT_DELIM_CAPTURE);
+        $regex = '';
+
+        foreach ($pieces === false ? [] : $pieces as $piece) {
+            if ($piece !== '' && $piece[0] === ':') {
+                $name = substr($piece, 1);
+                $this->paramNames[] = $name;
+                $regex .= '(' . ($this->constraints[$name] ?? '[^/]+') . ')';
             } else {
-                if (isset($callable) && is_callable($callable, true)) {
-                    call_user_func_array($callable, $this->_matches);
-                }
+                $regex .= preg_quote($piece, '#');
             }
-            return;
-        } catch (\Exception $ex) {
-            print_r($ex->getMessage());
-            exit();
         }
+
+        return $this->regex = '#^' . $regex . '$#iD';
+    }
+
+    private function invoke(mixed $callable): mixed
+    {
+        if (is_string($callable) && str_contains($callable, '#')) {
+            $callable = explode('#', $callable, 2);
+        }
+
+        if (is_array($callable)) {
+            if (count($callable) !== 2) {
+                throw new LogicException('A route handler must be [Class::class, "method"].');
+            }
+
+            [$class, $method] = array_values($callable);
+
+            if (is_string($class)) {
+                if (!class_exists($class)) {
+                    throw new LogicException("Controller class {$class} does not exist.");
+                }
+                $instance = new $class();
+            } elseif (is_object($class)) {
+                $instance = $class;
+            } else {
+                throw new LogicException('A route handler must be [Class::class, "method"].');
+            }
+
+            if (!is_string($method) || !is_callable([$instance, $method])) {
+                throw new LogicException('Controller method is missing or not callable.');
+            }
+
+            return $instance->{$method}(...$this->matches);
+        }
+
+        if (is_callable($callable)) {
+            return $callable(...$this->matches);
+        }
+
+        throw new LogicException('Route handler is not callable.');
     }
 }

@@ -1,11 +1,16 @@
-<?php namespace Core\Controllers;
+<?php
 
-class DocsCtrl {
+declare(strict_types=1);
 
-    public function index() {
-        $data['title'] = 'Docs';
-        $data['subtitle'] = 'Sample Pages';
-        return view('docs', $data);
+namespace Core\Controllers;
+
+class DocsCtrl
+{
+    public function index(): void
+    {
+        $data['title'] = 'Documentation - Kyaaaa-PHP';
+        $data['description'] = 'Learn routing, controllers, views, the query builder, sessions, CSRF protection, uploads and email in Kyaaaa-PHP.';
+
+        view('docs', $data);
     }
-
 }

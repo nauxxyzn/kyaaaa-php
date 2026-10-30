@@ -1,0 +1,15 @@
+# Safety net for hosts where the document root is the project folder instead of
+# /public. The recommended setup is still: point the document root to /public.
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Application code, dependencies, tests, dot files and dumps are never public
+    RewriteRule ^(?:core|vendor|tests)(?:/|$) - [F,L]
+    RewriteRule (?:^|/)\.(?!well-known/) - [F,L]
+    RewriteRule ^(?:composer\.(?:json|lock)|kyaaaa|README\.md|CHANGELOG\.md|[^/]*\.sql)$ - [F,L]
+
+    # Everything else is served from /public
+    RewriteRule ^(?!public/)(.*)$ public/$1 [L]
+</IfModule>

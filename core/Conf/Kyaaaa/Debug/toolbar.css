@@ -1,0 +1,80 @@
+:host { all: initial; }
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+.wrap {
+  --bg: #120d2e; --panel: #1b1542; --panel2: #251d57; --ink: #f3efff; --muted: #a89fd6; --line: #3f3589;
+  --pink: #ff3d8b; --yellow: #ffd23f; --mint: #3ddc97; --red: #ff6b8a; --code: #0c0922;
+  position: fixed; left: 12px; bottom: 12px; z-index: 2147483000;
+  color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Inherited properties pass through the shadow boundary from the page's own CSS
+     (body { letter-spacing: ... }, text-transform, ...), so pin every one of them. */
+  font-style: normal; font-variant: normal; letter-spacing: normal; word-spacing: normal;
+  text-transform: none; text-indent: 0; text-align: left; text-shadow: none; text-decoration: none;
+  white-space: normal; direction: ltr; visibility: visible; cursor: auto; list-style: none;
+}
+
+.dock {
+  display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 24px); padding: 6px;
+  border: 2px solid var(--line); border-radius: 999px; background: var(--bg);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, .55);
+}
+
+.mark {
+  flex: none; width: 40px; height: 40px; padding: 0; border: 2px solid #1b1340; border-radius: 50%;
+  background: var(--pink); color: #1b1340; cursor: pointer; box-shadow: 2px 2px 0 #000;
+  font: 900 15px/1 "Arial Black", system-ui, sans-serif; letter-spacing: -.04em;
+}
+.mark:hover { background: var(--yellow); }
+.mark b { font: inherit; }
+
+.chips { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+
+.chip {
+  display: inline-flex; flex: none; align-items: center; gap: 7px; padding: 7px 12px;
+  border: 0; border-radius: 999px; background: transparent; color: var(--ink);
+  font: inherit; white-space: nowrap; cursor: pointer;
+}
+.chip:hover { background: var(--panel2); }
+.chip .l { color: var(--muted); }
+.chip .v { font-weight: 800; }
+.chip[aria-expanded="true"] { background: var(--pink); color: #1b1340; }
+.chip[aria-expanded="true"] .l { color: #1b1340; }
+
+.chip.tone-ok .v::before, .chip.tone-warn .v::before, .chip.tone-err .v::before, .chip.tone-pink .v::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--dot);
+}
+.chip.tone-ok { --dot: var(--mint); }
+.chip.tone-warn { --dot: var(--yellow); }
+.chip.tone-err { --dot: var(--red); }
+.chip.tone-pink { --dot: var(--pink); }
+.chip[aria-expanded="true"] .v::before { background: #1b1340; }
+
+.notice {
+  flex: none; padding: 3px 10px; border: 1.5px solid var(--yellow); border-radius: 999px;
+  color: var(--yellow); font-size: 11px; font-weight: 800; white-space: nowrap;
+}
+
+.wrap.is-collapsed .chips, .wrap.is-collapsed .notice { display: none; }
+.wrap.is-collapsed .dock { padding: 3px; }
+
+.sheet {
+  position: fixed; left: 12px; bottom: 76px; display: flex; flex-direction: column;
+  width: min(1000px, calc(100vw - 24px)); max-height: min(64vh, 680px); overflow: hidden;
+  border: 2px solid var(--line); border-radius: 16px; background: var(--bg);
+  box-shadow: 6px 6px 0 rgba(0, 0, 0, .55);
+}
+.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 2px solid var(--line); background: var(--panel); }
+.sheet-title { margin: 0; font-size: 14px; font-weight: 800; }
+.sheet-close { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ink); font-size: 20px; line-height: 1; cursor: pointer; }
+.sheet-close:hover { background: var(--panel2); }
+.sheet-body { padding: 14px; overflow: auto; }
+
+.chip:focus-visible, .mark:focus-visible, .sheet-close:focus-visible, .copy:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .sheet { animation: rise .14s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+}
+
+@media print { .wrap { display: none; } }

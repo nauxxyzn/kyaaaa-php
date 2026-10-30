@@ -1,20 +1,26 @@
-<?php namespace Core\Conf;
+<?php
+
+declare(strict_types=1);
+
+namespace Core\Conf;
+
+use Core\Conf\Kyaaaa\Env;
+use Core\Conf\Kyaaaa\Mailer;
 
 class Email
 {
     /**
-     * Email Config
+     * Email config. Values come from .env (MAIL_HOST, MAIL_PORT, MAIL_CRYPTO
+     * ["ssl", "tls" or empty], MAIL_USERNAME, MAIL_PASSWORD).
      */
-    public function start()
+    public function start(): Mailer
     {
-        $config = [
-            'Protocol'       => 'smtp',
-            'SMTP_Host'      => 'smtp.gmail.com',
-            'SMTP_Username'  => 'email@gmail.com',
-            'SMTP_Password'  => 'smtp_password_here',
-            'SMTP_Port'      => 465,
-            'SMTP_Crypto'    => 'ssl'
-        ];
-        return new \Core\Conf\Kyaaaa\Mailer($config['SMTP_Host'], $config['SMTP_Port'], $config['SMTP_Crypto'], $config['SMTP_Username'], $config['SMTP_Password']);
+        return new Mailer(
+            (string) Env::get('MAIL_HOST', 'smtp.gmail.com'),
+            (int) Env::get('MAIL_PORT', '465'),
+            (string) Env::get('MAIL_CRYPTO', 'ssl'),
+            (string) Env::get('MAIL_USERNAME', ''),
+            (string) Env::get('MAIL_PASSWORD', '')
+        );
     }
 }

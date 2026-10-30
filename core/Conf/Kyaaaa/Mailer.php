@@ -1,47 +1,85 @@
-<?php namespace Core\Conf\Kyaaaa;
+<?php
 
+declare(strict_types=1);
+
+namespace Core\Conf\Kyaaaa;
+
+use InvalidArgumentException;
+use RuntimeException;
+use Throwable;
+
+/**
+ * Minimal SMTP client.
+ *
+ * Hardening compared to the old version: TLS certificates are verified, STARTTLS
+ * failures abort instead of silently continuing in plain text, credentials are
+ * never sent over an unencrypted connection, header values are stripped of line
+ * breaks, the body is dot-stuffed (no SMTP command injection), Bcc recipients
+ * are not exposed in the headers and attachments can be limited to a directory.
+ */
 class Mailer
 {
-    const NL = "\r\n";
+    public const NL = "\r\n";
 
-    private $host;
-    private $port;
-    private $secure;
-    private $username;
-    private $password;
+    private string $host;
+    private int $port;
+    private string $secure;
+    private string $username;
+    private string $password;
 
-    private $from = [];
-    private $to = [];
-    private $cc = [];
-    private $bcc = [];
-    private $replyTo = [];
-    private $recipients = [];
+    /** @var array{0: string, 1: string}|array{} */
+    private array $from = [];
 
-    private $files = [];
-    private $charset  = 'utf-8';
-    private $encoding = '8bit';
-    private $subject;
-    private $body;
-    private $text;
+    /** @var list<array{0: string, 1: string}> */
+    private array $to = [];
 
-    private $connection;
-    private $timeout = 30;
-    private $extensions = [];
+    /** @var list<array{0: string, 1: string}> */
+    private array $cc = [];
 
-    private $hostname;
-    private $debug = false;
+    /** @var list<array{0: string, 1: string}> */
+    private array $bcc = [];
 
-    public function __construct($host = 'localhost', $port = 25, $secure = '', $username = '', $password = '')
+    /** @var array<string, array{0: string, 1: string}> */
+    private array $replyTo = [];
+
+    /** @var array<string, bool> */
+    private array $recipients = [];
+
+    /** @var list<string> */
+    private array $files = [];
+
+    private ?string $attachmentBase = null;
+    private string $charset = 'utf-8';
+    private string $subject = '';
+    private string $body = '';
+    private string $text = '';
+
+    /** @var resource|null */
+    private $connection = null;
+
+    private int $timeout = 30;
+    private bool $encrypted = false;
+
+    /** @var array<string, true|list<string>> */
+    private array $extensions = [];
+
+    private string $hostname = '';
+    private bool $debug = false;
+    private string $lastError = '';
+
+    public function __construct(string $host = 'localhost', int|string $port = 25, string $secure = '', string $username = '', string $password = '')
     {
+        $secure = strtolower($secure);
+        if (!in_array($secure, ['', 'ssl', 'tls'], true)) {
+            throw new InvalidArgumentException('Mailer security must be "", "ssl" or "tls".');
+        }
+
         $this->host = $host;
         $this->port = (int) $port;
-        $this->secure = strtolower($secure);
+        $this->secure = $secure;
         $this->username = $username;
         $this->password = $password;
-
-        if (PHP_SAPI === 'cli') {
-            $this->debug = true;
-        }
+        $this->debug = PHP_SAPI === 'cli';
     }
 
     public function __destruct()
@@ -49,393 +87,584 @@ class Mailer
         $this->close();
     }
 
-    public function setFrom($address, $name = '')
+    public function setFrom(string $address, string $name = ''): void
     {
-        if ($address = $this->valid($address)) {
-            $this->from = [$address, $this->stripnl($name)];
+        $address = $this->valid($address);
+        if ($address !== false) {
+            $this->from = [$address, self::stripnl($name)];
         }
     }
 
-    public function addReplyTo($address, $name = '')
+    public function addReplyTo(string $address, string $name = ''): void
     {
-        if ($address = $this->valid($address)) {
-            if(!isset($this->replyTo[$address])) {
-                $this->replyTo[$address] = [$address, $this->stripnl($name)];
-            }
+        $address = $this->valid($address);
+        if ($address !== false && !isset($this->replyTo[$address])) {
+            $this->replyTo[$address] = [$address, self::stripnl($name)];
         }
     }
 
-    public function setTo($address, $name = '')
+    public function setTo(string $address, string $name = ''): void
     {
         $this->addTo($address, $name);
     }
 
-    public function addTo($address, $name = '')
+    public function addTo(string $address, string $name = ''): void
     {
-        if ($address = $this->valid($address)) {
-            if(!isset($this->recipients[$address])) {
-                $this->to[] = [$address, $this->stripnl($name)];
-                $this->recipients[$address] = true;
-            }
+        $address = $this->valid($address);
+        if ($address !== false && !isset($this->recipients[$address])) {
+            $this->to[] = [$address, self::stripnl($name)];
+            $this->recipients[$address] = true;
         }
     }
 
-    public function addCc($address, $name = '')
+    public function addCc(string $address, string $name = ''): void
     {
-        if ($address = $this->valid($address)) {
-            if(!isset($this->recipients[$address])) {
-                $this->cc[] = [$address, $this->stripnl($name)];
-                $this->recipients[$address] = true;
-            }
+        $address = $this->valid($address);
+        if ($address !== false && !isset($this->recipients[$address])) {
+            $this->cc[] = [$address, self::stripnl($name)];
+            $this->recipients[$address] = true;
         }
     }
 
-    public function addBcc($address, $name = '')
+    public function addBcc(string $address, string $name = ''): void
     {
-        if ($address = $this->valid($address)) {
-            if(!isset($this->recipients[$address])) {
-                $this->bcc[] = [$address, $this->stripnl($name)];
-                $this->recipients[$address] = true;
-            }
+        $address = $this->valid($address);
+        if ($address !== false && !isset($this->recipients[$address])) {
+            $this->bcc[] = [$address, self::stripnl($name)];
+            $this->recipients[$address] = true;
         }
     }
 
-    public function addFile($file)
+    /**
+     * Only attach files located inside $directory. Strongly recommended when
+     * a file name can ever be influenced by a visitor.
+     */
+    public function allowAttachmentsFrom(string $directory): void
     {
-        if ($file && is_file($file)) {
-            $this->files[] = $file;
+        $real = realpath($directory);
+        if ($real === false || !is_dir($real)) {
+            throw new InvalidArgumentException('Attachment directory does not exist.');
         }
+
+        $this->attachmentBase = rtrim($real, '/\\');
     }
 
-    private function init()
+    public function addFile(string $file): void
     {
-        if (strpos($this->host, ':')) {
-            $this->host = preg_replace(['#[\w]+://#', '#:[\w]+#'], '', $this->host);
+        $real = realpath($file);
+        if ($real === false || !is_file($real) || !is_readable($real) || filesize($real) > 20 * 1048576) {
+            return;
         }
 
-        if (empty($this->to)) {
-            throw new \Exception('ERROR: A valid email address to send to is required');
+        if ($this->attachmentBase !== null && !str_starts_with($real, $this->attachmentBase . DIRECTORY_SEPARATOR)) {
+            return;
         }
 
-        if (strlen(trim($this->body)) < 3) {
-            throw new \Exception('ERROR: Message body empty');
-        }
-
-        if ($this->secure === 'ssl') {
-            $this->host = $this->secure . '://' . $this->host;
-        }
-
-        if (empty($this->from)) {
-            $this->from = [$this->username, ''];
-        }
-
-        if (empty($this->hostname)) {
-            $this->hostname = gethostname();
-        }
+        $this->files[] = $real;
     }
 
-    public function send()
+    public function setSubject(string $subject = ''): void
     {
+        $this->subject = $subject;
+    }
+
+    public function setBody(string $body = ''): void
+    {
+        $this->body = $body;
+    }
+
+    /** Plain text alternative. Generated from the HTML body when not set. */
+    public function setText(string $text = ''): void
+    {
+        $this->text = $text;
+    }
+
+    public function setTimeout(int $seconds = 30): void
+    {
+        $this->timeout = max(1, $seconds);
+    }
+
+    public function getTimeout(): int
+    {
+        return $this->timeout;
+    }
+
+    public function setDebug(bool $debug): void
+    {
+        $this->debug = $debug;
+    }
+
+    public function getLastError(): string
+    {
+        return $this->lastError;
+    }
+
+    public function send(): bool
+    {
+        $this->lastError = '';
+
         try {
             $this->init();
             $this->connect();
             $this->auth();
 
-            $this->request('MAIL FROM: <'.$this->from[0].'>', 250);
-            $addresses = array_keys($this->recipients);
-            foreach($addresses as $address) {
-                $this->request('RCPT TO: <'. $address . '>', 250);
+            $this->request('MAIL FROM:<' . $this->from[0] . '>', [250]);
+            foreach (array_keys($this->recipients) as $address) {
+                $this->request('RCPT TO:<' . $address . '>', [250, 251]);
             }
 
-            $this->request('DATA', 354);
-            $this->request($this->createMessage(), 250);
-            $this->request('QUIT', 221);
+            $this->request('DATA', [354]);
+            $this->sendData(self::dotStuff($this->createMessage()));
+            $this->request('QUIT', [221]);
+            $this->close();
 
             return true;
-        } catch(\Exception $e) {
-            $this->debug($e->getMessage());
+        } catch (Throwable $e) {
+            $this->lastError = $e->getMessage();
+            $this->debug('ERROR: ' . $e->getMessage());
+            error_log('[kyaaaa] Mailer: ' . str_replace(["\r", "\n"], ' ', $e->getMessage()));
+            $this->close();
+
             return false;
         }
-
-        return true;
     }
 
-    public function setSubject($subject = '')
+    public function createMessage(): string
     {
-        $this->subject = $subject;
+        return $this->createHeader() . self::NL . $this->createContent();
     }
 
-    public function setBody($body = '')
+    /**
+     * Normalise line endings to CRLF and double a leading dot on every line so
+     * the body can never end the DATA command early.
+     */
+    public static function dotStuff(string $message): string
     {
-        $this->body = $body;
+        $message = (string) preg_replace('/\r\n|\r|\n/', self::NL, $message);
+
+        return (string) preg_replace('/(^|\r\n)\./', '$1..', $message);
     }
 
-    public function createMessage()
+    public static function stripnl(string $str): string
     {
-        $message = [];
-        $message[]  = $this->createHeader();
-        $message[] = $this->createContent();
-        return implode(static::NL, $message);
+        return trim(str_replace(["\r", "\n", "\0"], '', $str));
     }
 
-    private function createHeader()
+    public function html2text(string $html): string
     {
-        $headers[] = 'Date: '. date('r');
-        $headers[] = 'To: '.$this->concatAddress($this->to);
-        $headers[] = 'From: '.$this->formatAddress($this->from);
+        $html = preg_replace('~<(head|title|style|script)\b[^>]*>.*?</\1>~is', '', $html) ?? $html;
+        $html = preg_replace('~<br\s*/?>|</p>|</div>|</li>|</tr>~i', "\n", $html) ?? $html;
 
-        if (!empty($this->cc)) {
-            $headers[] = 'Cc: '.$this->concatAddress($this->cc);
+        return trim(html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    // ------------------------------------------------------------------
+    // Message
+    // ------------------------------------------------------------------
+
+    private function createHeader(): string
+    {
+        $headers = [
+            'Date: ' . date('r'),
+            'To: ' . $this->concatAddress($this->to),
+            'From: ' . $this->formatAddress($this->from),
+        ];
+
+        if ($this->cc !== []) {
+            $headers[] = 'Cc: ' . $this->concatAddress($this->cc);
         }
 
-        if (!empty($this->bcc)) {
-            $headers[] = 'Bcc: '.$this->concatAddress($this->bcc);
+        // Bcc recipients are only used for RCPT TO, never written to a header.
+
+        if ($this->replyTo !== []) {
+            $headers[] = 'Reply-To: ' . $this->concatAddress(array_values($this->replyTo));
         }
 
-        if (!empty($this->replyTo)) {
-            $headers[] = 'Reply-To: '.$this->concatAddress($this->replyTo);
-        }
-
-        $headers[] = iconv_mime_encode('Subject', $this->subject);
-        $headers[] = 'Message-ID: '. $this->generateMessageId();
-        $headers[] = 'X-Mailer: SMTPMailer v1.0.0 https://github.com/smtpmailer/smtpmailer';
+        $headers[] = 'Subject: ' . $this->encodeHeader($this->subject);
+        $headers[] = 'Message-ID: ' . $this->generateMessageId();
         $headers[] = 'MIME-Version: 1.0';
 
-        return implode(static::NL, $headers);
+        return implode(self::NL, $headers);
     }
 
-    private function createContent()
+    private function createContent(): string
     {
-        $boundary = md5(uniqid());
+        $alternative = 'kyaaaa_a_' . bin2hex(random_bytes(12));
+        $text = $this->text !== '' ? $this->text : $this->html2text($this->body);
 
-        $contents = [];
+        if ($this->files === []) {
+            $lines = [
+                'Content-Type: multipart/alternative; boundary="' . $alternative . '"',
+                '',
+                'This is a multi-part message in MIME format.',
+            ];
 
-        if (empty($this->text)) {
-            $this->text = $this->html2text($this->body);
+            return implode(self::NL, array_merge($lines, $this->alternativeParts($alternative, $text)));
         }
 
-        $contents[] = 'Content-Type: multipart/'. (!empty($this->files) ? 'mixed' : 'alternative') .'; boundary="'.$boundary.'"';
-        $contents[] = '';
-        $contents[] = 'This is a multi-part message in MIME format.';
-        $contents[] = '--'. $boundary;
+        $mixed = 'kyaaaa_m_' . bin2hex(random_bytes(12));
+        $lines = [
+            'Content-Type: multipart/mixed; boundary="' . $mixed . '"',
+            '',
+            'This is a multi-part message in MIME format.',
+            '--' . $mixed,
+            'Content-Type: multipart/alternative; boundary="' . $alternative . '"',
+            '',
+        ];
+        $lines = array_merge($lines, $this->alternativeParts($alternative, $text));
 
-        $contents[] = $this->formatContent('plain', 'text');
-        $contents[] = '--'. $boundary;
-
-        $contents[] = $this->formatContent('html', 'body');
-        $contents[] = '--'. $boundary;
-
-        if (!empty($this->files)) {
-            $contents[] = $this->createAttachment($boundary);
-        }
-
-        $contents[count($contents)-1] .= '--';
-        $contents[] = ".";
-
-        return implode(static::NL, $contents);
-    }
-
-    private function formatContent($type, $content)
-    {
-        $contents[] = 'Content-Type: text/'.$type.'; charset="'.$this->charset.'"';
-        $contents[] = 'Content-Transfer-Encoding: '. $this->encoding;
-        $contents[] = '';
-        $contents[] = ($this->encoding == 'quoted-printable') ? quoted_printable_encode($this->$content) : $this->$content;
-        return implode(static::NL, $contents);
-    }
-
-    private function createAttachment($boundary)
-    {
-        $contents = [];
         foreach ($this->files as $file) {
-            if (file_exists($file)) {
-                $contents[] = 'Content-Type: application/octet-stream; '.'name="'. basename($file) .'"';
-                $contents[] = 'Content-Transfer-Encoding: base64';
-                $contents[] = 'Content-Disposition: attachment';
-                $contents[] = '';
-                $contents[] = chunk_split(base64_encode(file_get_contents($file)));
-                $contents[] = '--'.$boundary;
-            }
-        }
-        return implode(static::NL, $contents);
-    }
-
-    public function connect()
-    {
-        $this->debug("Connecting to {$this->host}:{$this->port}");
-
-        $this->connection = @stream_socket_client($this->host . ':' . $this->port, $errno, $errstr, $this->timeout);
-
-        if (!$this->connection) {
-            extract(error_get_last());
-            throw new \Exception("ERROR: $errstr in $file on line $line");
-        }
-
-        $this->debug('Connecting successfully');
-
-        $this->response(220);
-
-        $this->request('EHLO '.$this->hostname, 250);
-
-        if ($this->secure === 'tls' || isset($this->extensions['STARTTLS'])) {
-            $this->request('STARTTLS', 220);
-            stream_socket_enable_crypto($this->connection, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-        }
-
-        return true;
-    }
-
-    private function auth()
-    {
-        if (!empty($this->extensions['AUTH'])) {
-
-            if (empty($this->username) || empty($this->password)) {
-                throw new \Exception('ERROR: SMTP username/password for '. $this->host . ' is required');
+            $name = (string) preg_replace('/[^A-Za-z0-9._-]+/', '_', basename($file));
+            $content = file_get_contents($file);
+            if ($content === false) {
+                continue;
             }
 
-            $authType = $this->extensions['AUTH'];
-
-            switch($authType) {
-                case 'PLAIN':
-                    $this->request('AUTH PLAIN', 334);
-                    $this->request(base64_encode("\0" . $this->username . "\0" . $this->password), 235);
-                    break;
-                case 'LOGIN':
-                    $this->request('AUTH LOGIN', 334);
-                    $this->request(base64_encode($this->username), 334);
-                    $this->request(base64_encode($this->password), 235);
-                    break;
-                default:
-                    throw new \Exception('ERROR: Authentication method "'. $authType . '" is not supported');
-            }
-        }
-        return true;
-    }
-
-    private function request($cmd, $code)
-    {
-        $this->debug('REQUEST: ' . $cmd);
-        fwrite($this->connection, $cmd . static::NL);
-
-        $prefix = substr($cmd, 0, 4);
-        return $this->response($code, $prefix);
-    }
-
-    private function response($code, $prefix = '')
-    {
-        stream_set_timeout($this->connection, $this->timeout);
-        $result = fread($this->connection, 768);
-
-        $meta = stream_get_meta_data($this->connection);
-        if ($meta['timed_out']) {
-            throw new \Exception('ERROR: Stream socket timed-out (' . $this->timeout . 's)');
+            $lines[] = '--' . $mixed;
+            $lines[] = 'Content-Type: application/octet-stream; name="' . $name . '"';
+            $lines[] = 'Content-Transfer-Encoding: base64';
+            $lines[] = 'Content-Disposition: attachment; filename="' . $name . '"';
+            $lines[] = '';
+            $lines[] = $this->encodeBase64($content);
         }
 
-        if (substr($result, 0, 3) != $code) {
-            throw new \Exception($result);
+        $lines[] = '--' . $mixed . '--';
+
+        return implode(self::NL, $lines);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function alternativeParts(string $boundary, string $text): array
+    {
+        return [
+            '--' . $boundary,
+            'Content-Type: text/plain; charset="' . $this->charset . '"',
+            'Content-Transfer-Encoding: base64',
+            '',
+            $this->encodeBase64($text),
+            '--' . $boundary,
+            'Content-Type: text/html; charset="' . $this->charset . '"',
+            'Content-Transfer-Encoding: base64',
+            '',
+            $this->encodeBase64($this->body),
+            '--' . $boundary . '--',
+        ];
+    }
+
+    private function encodeBase64(string $data): string
+    {
+        return rtrim(chunk_split(base64_encode($data), 76, self::NL));
+    }
+
+    private function encodeHeader(string $value): string
+    {
+        $value = self::stripnl($value);
+
+        if (preg_match('/^[\x20-\x7E]*$/', $value) === 1) {
+            return substr($value, 0, 900);
         }
 
-        $this->debug("RESPONSE: " . $result);
+        return mb_encode_mimeheader($value, 'UTF-8', 'B', self::NL);
+    }
 
-        if ($prefix === 'EHLO') {
-            $this->parseEhloResponse($result);
-        } elseif ($prefix === 'QUIT') {
-            $this->close();
+    /**
+     * @param array{0: string, 1: string}|array{} $address
+     */
+    private function formatAddress(array $address): string
+    {
+        if ($address === []) {
+            return '';
         }
 
-        return true;
-    }
-
-    private function close()
-    {
-        $this->extensions = null;
-        if ($this->connection) {
-            fclose($this->connection);
-            $this->connection = null;
-            $this->debug('Connection: closed');
+        [$email, $name] = $address;
+        if ($name === '') {
+            return $email;
         }
-    }
 
-    private function parseEhloResponse($str)
-    {
-        $ary = explode("\n", trim(str_replace(["\r\n", "\r"], "\n", $str)));
-        unset($ary[0]);
-        foreach($ary as $ext) {
-            $v = explode(" ", substr($ext, 4));
-            $key = $v[0];
-            if (isset($v[1])) {
-                unset($v[0]);
-                $this->extensions[$key] = $v[1];
-            } else {
-                $this->extensions[$key] = true;
-            }
+        $encoded = $this->encodeHeader($name);
+        if (!str_starts_with($encoded, '=?')) {
+            $encoded = '"' . addcslashes($encoded, "\"\\") . '"';
         }
+
+        return $encoded . ' <' . $email . '>';
     }
 
-    private function debug($str)
-    {
-        if (!$this->debug) {
-            return;
-        }
-        $str = preg_replace('/\r\n|\r/ms', "\n", $str);
-        echo "[", date('Y-m-d H:i:s'), "] ", trim(str_replace("\n","\n" . str_repeat("\t", 4), trim($str))), "\n";
-    }
-
-    private function valid($address)
-    {
-        $address = strtolower($address);
-        $address = filter_var($address, FILTER_SANITIZE_EMAIL);
-        if (!filter_var($address, FILTER_VALIDATE_EMAIL)) {
-            $this->debug('Invalid address: '. $address);
-            return false;
-        }
-        return $address;
-    }
-
-    public function setTimeout($seconds = 30)
-    {
-        $this->timeout = (int) $seconds;
-    }
-
-    public function getTimeout()
-    {
-        return $this->timeout;
-    }
-
-    public static function stripnl($str)
-    {
-        return trim(str_replace(["\r", "\n"], '', $str));
-    }
-
-    private function formatAddress($address)
-    {
-        if (empty($address[1])) {
-            return $address[0];
-        }
-        return '"'. preg_replace('#^:\s+#', '', iconv_mime_encode('', $address[1])) .'" <'.$address[0].'>';
-    }
-
-    private function concatAddress($addresses)
+    /**
+     * @param list<array{0: string, 1: string}> $addresses
+     */
+    private function concatAddress(array $addresses): string
     {
         $list = [];
         foreach ($addresses as $address) {
             $list[] = $this->formatAddress($address);
         }
+
         return implode(', ', $list);
     }
 
-    private function generateMessageId()
+    private function generateMessageId(): string
     {
-        $bytes = random_bytes(16);
-        $bytes[6] = chr(ord($bytes[6]) & 0x0f | 0x40);
-        $bytes[8] = chr(ord($bytes[8]) & 0x3f | 0x80);
-        return '<' . vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($bytes), 4)) . '@' . $this->hostname .'>';
+        $host = (string) preg_replace('/[^A-Za-z0-9.-]/', '', $this->ehloName());
+
+        return '<' . bin2hex(random_bytes(16)) . '@' . ($host !== '' ? $host : 'localhost') . '>';
     }
 
-    public function html2text($html)
+    private function valid(string $address): string|false
     {
-        $html = html_entity_decode($html, ENT_QUOTES, $this->charset);
-        $html = strip_tags(preg_replace('/<(head|title|style|script)[^>]*>.*?<\/\\1>/si', '', $html), '<br>');
-        return trim(str_replace('<br>', "\n", $html));
+        $address = strtolower(trim($address));
+
+        if (preg_match('/[\r\n\0<>,;"\s]/', $address) === 1) {
+            $this->debug('Invalid address rejected');
+
+            return false;
+        }
+
+        $valid = filter_var($address, FILTER_VALIDATE_EMAIL);
+        if ($valid === false) {
+            $this->debug('Invalid address rejected');
+
+            return false;
+        }
+
+        return $valid;
+    }
+
+    // ------------------------------------------------------------------
+    // SMTP
+    // ------------------------------------------------------------------
+
+    private function init(): void
+    {
+        if ($this->to === []) {
+            throw new RuntimeException('A valid email address to send to is required.');
+        }
+
+        if (strlen(trim($this->body)) < 3) {
+            throw new RuntimeException('Message body is empty.');
+        }
+
+        if ($this->from === []) {
+            $from = $this->valid($this->username);
+            if ($from === false) {
+                throw new RuntimeException('A valid sender address is required (setFrom).');
+            }
+            $this->from = [$from, ''];
+        }
+    }
+
+    private function remoteHost(): string
+    {
+        $host = (string) preg_replace('~^[a-z]+://~i', '', $this->host);
+
+        if (!str_starts_with($host, '[')) {
+            $host = (string) preg_replace('/:\d+$/', '', $host);
+        }
+
+        if (preg_match('/^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$/', $host) !== 1) {
+            throw new RuntimeException('Invalid SMTP host.');
+        }
+
+        return $host;
+    }
+
+    private function ehloName(): string
+    {
+        if ($this->hostname === '') {
+            $name = gethostname();
+            $name = is_string($name) ? (string) preg_replace('/[^A-Za-z0-9.-]/', '', $name) : '';
+            $this->hostname = $name !== '' ? $name : 'localhost';
+        }
+
+        return $this->hostname;
+    }
+
+    public function connect(): bool
+    {
+        $host = $this->remoteHost();
+        $this->debug("Connecting to {$host}:{$this->port}");
+
+        $crypto = STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT;
+        $context = stream_context_create([
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'allow_self_signed' => false,
+                'peer_name' => trim($host, '[]'),
+                'SNI_enabled' => true,
+                'crypto_method' => $crypto,
+            ],
+        ]);
+
+        $remote = ($this->secure === 'ssl' ? 'ssl://' : 'tcp://') . $host . ':' . $this->port;
+        $connection = @stream_socket_client($remote, $errno, $errstr, $this->timeout, STREAM_CLIENT_CONNECT, $context);
+
+        if ($connection === false) {
+            throw new RuntimeException("Unable to connect to the SMTP server ({$errno}): {$errstr}");
+        }
+
+        stream_set_timeout($connection, $this->timeout);
+        $this->connection = $connection;
+        $this->encrypted = $this->secure === 'ssl';
+
+        $this->readResponse([220]);
+        $this->request('EHLO ' . $this->ehloName(), [250]);
+
+        if ($this->secure !== 'ssl') {
+            if (isset($this->extensions['STARTTLS'])) {
+                $this->request('STARTTLS', [220]);
+
+                if (stream_socket_enable_crypto($connection, true, $crypto) !== true) {
+                    throw new RuntimeException('STARTTLS negotiation failed.');
+                }
+
+                $this->encrypted = true;
+                $this->extensions = [];
+                $this->request('EHLO ' . $this->ehloName(), [250]);
+            } elseif ($this->secure === 'tls') {
+                throw new RuntimeException('The SMTP server does not support STARTTLS.');
+            }
+        }
+
+        return true;
+    }
+
+    private function auth(): void
+    {
+        if ($this->username === '' || $this->password === '' || !isset($this->extensions['AUTH'])) {
+            return;
+        }
+
+        if (!$this->encrypted && !in_array(strtolower($this->remoteHost()), ['localhost', '127.0.0.1', '[::1]'], true)) {
+            throw new RuntimeException('Refusing to send SMTP credentials over an unencrypted connection.');
+        }
+
+        $mechanisms = is_array($this->extensions['AUTH']) ? $this->extensions['AUTH'] : [];
+
+        if (in_array('PLAIN', $mechanisms, true)) {
+            $this->request('AUTH PLAIN', [334]);
+            $this->request(base64_encode("\0" . $this->username . "\0" . $this->password), [235], '[credentials hidden]');
+        } elseif (in_array('LOGIN', $mechanisms, true)) {
+            $this->request('AUTH LOGIN', [334]);
+            $this->request(base64_encode($this->username), [334], '[username hidden]');
+            $this->request(base64_encode($this->password), [235], '[password hidden]');
+        } else {
+            throw new RuntimeException('No supported SMTP authentication method (PLAIN or LOGIN).');
+        }
+    }
+
+    /**
+     * @param list<int> $expected
+     */
+    private function request(string $command, array $expected, ?string $log = null): string
+    {
+        if (preg_match('/[\r\n]/', $command) === 1) {
+            throw new RuntimeException('Line break in SMTP command.');
+        }
+
+        $this->debug('REQUEST: ' . ($log ?? $command));
+        $this->write($command . self::NL);
+
+        $response = $this->readResponse($expected);
+
+        if (str_starts_with($command, 'EHLO')) {
+            $this->parseEhlo($response);
+        }
+
+        return $response;
+    }
+
+    private function sendData(string $message): void
+    {
+        $this->debug('REQUEST: [message body]');
+        $this->write($message . self::NL . '.' . self::NL);
+        $this->readResponse([250]);
+    }
+
+    private function write(string $data): void
+    {
+        if (!is_resource($this->connection) || fwrite($this->connection, $data) === false) {
+            throw new RuntimeException('Unable to write to the SMTP connection.');
+        }
+    }
+
+    /**
+     * @param list<int> $expected
+     */
+    private function readResponse(array $expected): string
+    {
+        if (!is_resource($this->connection)) {
+            throw new RuntimeException('SMTP connection is closed.');
+        }
+
+        $response = '';
+        for ($i = 0; $i < 100; $i++) {
+            $line = fgets($this->connection, 1024);
+
+            if ($line === false) {
+                $meta = stream_get_meta_data($this->connection);
+                throw new RuntimeException($meta['timed_out'] ? 'SMTP connection timed out.' : 'SMTP connection closed unexpectedly.');
+            }
+
+            $response .= $line;
+
+            // "250-..." continues, "250 ..." is the last line of the reply
+            if (strlen($line) < 4 || $line[3] !== '-') {
+                break;
+            }
+        }
+
+        $this->debug('RESPONSE: ' . $response);
+
+        if (!in_array((int) substr($response, 0, 3), $expected, true)) {
+            throw new RuntimeException(trim($response));
+        }
+
+        return $response;
+    }
+
+    private function parseEhlo(string $response): void
+    {
+        $this->extensions = [];
+
+        $lines = preg_split('/\r\n|\r|\n/', trim($response));
+        if ($lines === false) {
+            return;
+        }
+
+        array_shift($lines); // greeting
+
+        foreach ($lines as $line) {
+            $parts = preg_split('/\s+/', trim(substr($line, 4)));
+            if ($parts === false || $parts[0] === '') {
+                continue;
+            }
+
+            $name = strtoupper((string) array_shift($parts));
+            $this->extensions[$name] = $parts === [] ? true : array_map('strtoupper', $parts);
+        }
+    }
+
+    private function close(): void
+    {
+        if (is_resource($this->connection)) {
+            fclose($this->connection);
+            $this->debug('Connection closed');
+        }
+
+        $this->connection = null;
+        $this->extensions = [];
+        $this->encrypted = false;
+    }
+
+    private function debug(string $message): void
+    {
+        if (!$this->debug) {
+            return;
+        }
+
+        $message = (string) preg_replace('/\r\n|\r/', "\n", $message);
+        echo '[', date('Y-m-d H:i:s'), '] ', trim(str_replace("\n", "\n\t\t\t\t", trim($message))), "\n";
     }
 }

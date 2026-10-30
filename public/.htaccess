@@ -1,5 +1,25 @@
-RewriteEngine On
+Options -Indexes
 
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ index.php?/$1 [L]
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Never serve dot files (.env, .git, .htpasswd ...)
+    RewriteRule (^|/)\.(?!well-known/) - [F,L]
+
+    # Everything that is not a real file or directory goes to the front controller
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [L,QSA]
+</IfModule>
+
+# Only index.php may run as PHP. Uploaded or leftover scripts in /public are denied.
+# (Remove this block if you deliberately keep other PHP entry points here.)
+<FilesMatch "^(?!index\.php$).*\.(?:php|phtml|phar|pht|php[0-9])$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>

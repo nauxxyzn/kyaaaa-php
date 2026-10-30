@@ -1,24 +1,53 @@
 #!/usr/bin/env php
 <?php
-$host = 'localhost';
-$port = (int) 5555;
 
-$minPhpVersion = '7.4';
-if (version_compare(PHP_VERSION, $minPhpVersion, '<')) {
-    $message = sprintf(
-        'Your PHP version must be %s or higher. Current version: %s',
-        $minPhpVersion,
-        PHP_VERSION
-    );
-    exit($message);
+declare(strict_types=1);
+
+const KYAAAA_MIN_PHP = '8.3.0';
+
+if (PHP_SAPI !== 'cli') {
+    exit('This script must be run from the command line.');
 }
+
+if (version_compare(PHP_VERSION, KYAAAA_MIN_PHP, '<')) {
+    fwrite(STDERR, sprintf(
+        "Your PHP version must be %s or higher. Current version: %s\n",
+        KYAAAA_MIN_PHP,
+        PHP_VERSION
+    ));
+    exit(1);
+}
+
 error_reporting(-1);
 ini_set('display_errors', '1');
 
-define('FCPATH', __DIR__ . '/public' . DIRECTORY_SEPARATOR);
+$host = 'localhost';
+$port = 5555;
 
-$php  = PHP_BINARY;
+// Usage: php kyaaaa [--host=localhost] [--port=5555]
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--host=([A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])$/', $arg, $m) === 1) {
+        $host = $m[1];
+    } elseif (preg_match('/^--port=(\d{2,5})$/', $arg, $m) === 1 && (int) $m[1] <= 65535) {
+        $port = (int) $m[1];
+    } else {
+        fwrite(STDERR, "Invalid option. Usage: php kyaaaa [--host=localhost] [--port=5555]\n");
+        exit(1);
+    }
+}
 
-$docroot = escapeshellarg(FCPATH);
+$docroot = __DIR__ . DIRECTORY_SEPARATOR . 'public';
+
+if (!in_array($host, ['localhost', '127.0.0.1', '[::1]'], true)) {
+    echo "Warning: {$host} may expose this development server to your network. "
+        . "The built-in PHP server is for development only.\n";
+}
+
 echo "Kyaaaa~ starting server... don't forget take ur coffe before start!" . PHP_EOL;
-passthru($php . ' -S ' . $host . ':' . $port . ' -t ' . $docroot);
+
+$command = escapeshellarg(PHP_BINARY)
+    . ' -S ' . escapeshellarg($host . ':' . $port)
+    . ' -t ' . escapeshellarg($docroot);
+
+passthru($command, $exitCode);
+exit($exitCode);

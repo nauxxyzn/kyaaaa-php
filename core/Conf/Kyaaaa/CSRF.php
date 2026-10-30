@@ -1,62 +1,120 @@
-<?php namespace Core\Conf\Kyaaaa;
+<?php
 
-class CSRF {
-	private $token_expiry=7200;
-	private $field_name='kyaaaaaaaKyaaa_csrf';
-	private $token_key='$tui*&_-lpnwj%';
+declare(strict_types=1);
 
+namespace Core\Conf\Kyaaaa;
 
-	public function __construct(){
-		$this->Init();
-	}
+use RuntimeException;
 
-	public function setExpiry($expiry){
-		$this->token_expiry=$expiry;
-	}
+class CSRF
+{
+    private const HEADER = 'HTTP_X_CSRF_TOKEN';
 
-	public function setTokenName($tokenname){
-		$this->field_name=$tokenname;
-	}
+    private static int $tokenExpiry = 7200;
+    private static string $fieldName = 'kyaaaaaaaKyaaa_csrf';
 
-	public function setTokenKey($key){
-		$this->token_key=$key;
-	}
+    public function __construct()
+    {
+        $this->init();
+    }
 
-	public function isValidRequest(){
-		if (empty($_POST[$this->field_name]) || empty($_SESSION['csrf']['token'])) {
-			return false;
-		}
-		if(!hash_equals($_POST[$this->field_name],$_SESSION['csrf']['token']) || $_SESSION['csrf']['expiry'] < time()){
-			return false;
-		} else {
-			return true;
-		}
-	}
+    public function setExpiry(int $expiry): void
+    {
+        self::$tokenExpiry = max(1, $expiry);
+    }
 
-	public function tokenField(){
-		$token=$this->field_name;
-		$token_value=$_SESSION['csrf']['token'];
-		$html="<input type='hidden' name='$token' value='$token_value'>";
-		echo $html;
-	}
+    public function setTokenName(string $tokenName): void
+    {
+        if (preg_match('/^[A-Za-z0-9_-]{1,64}$/', $tokenName) !== 1) {
+            throw new \InvalidArgumentException('Invalid CSRF field name.');
+        }
 
-	private function Init(){
-		if(array_key_exists('csrf',$_SESSION)){
-			if(empty($_SESSION['csrf']['token']) || $_SESSION['csrf']['expiry'] < time()){
-				$this->generateToken();
-			}
-		}
-		else {
-			$this->generateToken();
-		}
-	}
+        self::$fieldName = $tokenName;
+    }
 
-	protected function generateToken() {
-		$token=hash_hmac('sha256',session_id().time(),$this->token_key);
-		$token=substr($token,0,32);
-		$_SESSION['csrf']=array(
-			'token' => $token ,
-			'expiry' => time() + $this->token_expiry
-		);
-	}
+    /**
+     * @deprecated The token is now random (random_bytes), a secret key is no
+     *             longer needed. Kept so old code does not break.
+     */
+    public function setTokenKey(string $key): void
+    {
+    }
+
+    public function getTokenName(): string
+    {
+        return self::$fieldName;
+    }
+
+    public function token(): string
+    {
+        return (string) $_SESSION['csrf']['token'];
+    }
+
+    /**
+     * Valid when the token comes from the POST field or the X-CSRF-Token header,
+     * has not expired and (if the browser sends an Origin header) the request
+     * comes from our own site.
+     */
+    public function isValidRequest(): bool
+    {
+        $sent = $_POST[self::$fieldName] ?? ($_SERVER[self::HEADER] ?? null);
+        $stored = $_SESSION['csrf']['token'] ?? null;
+        $expiry = (int) ($_SESSION['csrf']['expiry'] ?? 0);
+
+        if (!is_string($sent) || $sent === '' || !is_string($stored) || $stored === '') {
+            return false;
+        }
+
+        if ($expiry < time() || !hash_equals($stored, $sent)) {
+            return false;
+        }
+
+        return Security::originAllowed();
+    }
+
+    /** The hidden <input> as a string. */
+    public function field(): string
+    {
+        return '<input type="hidden" name="' . htmlspecialchars(self::$fieldName, ENT_QUOTES, 'UTF-8')
+            . '" value="' . htmlspecialchars($this->token(), ENT_QUOTES, 'UTF-8') . '">';
+    }
+
+    /** Echo the hidden <input> (kept for backwards compatibility). */
+    public function tokenField(): void
+    {
+        echo $this->field();
+    }
+
+    /** <meta> tag for AJAX: send its content in the X-CSRF-Token header. */
+    public function metaTag(): string
+    {
+        return '<meta name="csrf-token" content="' . htmlspecialchars($this->token(), ENT_QUOTES, 'UTF-8') . '">';
+    }
+
+    private function init(): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            throw new RuntimeException('CSRF protection needs an active session.');
+        }
+
+        $csrf = $_SESSION['csrf'] ?? null;
+
+        if (
+            !is_array($csrf)
+            || !isset($csrf['token'])
+            || !is_string($csrf['token'])
+            || $csrf['token'] === ''
+            || (int) ($csrf['expiry'] ?? 0) < time()
+        ) {
+            $this->generateToken();
+        }
+    }
+
+    protected function generateToken(): void
+    {
+        $_SESSION['csrf'] = [
+            'token' => bin2hex(random_bytes(32)),
+            'expiry' => time() + self::$tokenExpiry,
+        ];
+    }
 }

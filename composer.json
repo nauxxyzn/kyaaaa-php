@@ -1,6 +1,7 @@
 {
     "name": "naufkia/kyaaaa-php",
     "description": "Kyaaaa Weird PHP Framework",
+    "type": "project",
     "license": "MIT",
     "authors": [
         {
@@ -8,12 +9,26 @@
         }
     ],
     "require": {
-        "php": "^7.3|^8.0"
+        "php": "^8.3",
+        "ext-fileinfo": "*",
+        "ext-json": "*",
+        "ext-mbstring": "*",
+        "ext-pdo": "*"
     },
     "autoload": {
         "psr-4": {
-            "Core\\": ["core/"]
-        }
+            "Core\\": "core/"
+        },
+        "files": [
+            "core/Conf/Kyaaaa/Common.php"
+        ]
     },
-    "minimum-stability": "dev"
+    "scripts": {
+        "serve": "@php kyaaaa",
+        "test": "@php tests/smoke.php"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
 }

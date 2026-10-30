@@ -1,151 +1,154 @@
-<?php namespace Core\Conf\Kyaaaa;
+<?php
+
+declare(strict_types=1);
+
+namespace Core\Conf\Kyaaaa;
+
+use RuntimeException;
 
 class Session
 {
     /**
-     * @var $_SESSION
-     */
-    private static $session;
-
-    /**
-     * Session options.
+     * Secure defaults. Anything passed to config() overrides these, except the
+     * options that are forced below.
+     *
      * @see https://www.php.net/manual/en/session.configuration.php
      */
-    private static $options = [
-        'name'            => 'kyaaaa_session',
-        'cookie_lifetime' => 86400, // Seconds
+    private const DEFAULTS = [
+        'name' => 'kyaaaa_session',
+        'cookie_lifetime' => 86400, // seconds
         'cookie_domain' => '',
-        'cookie_samesite' => '',
         'cookie_path' => '/',
-        'cache_expire' => '180',
-        'cache_limiter' => 'nocache'
+        'cookie_httponly' => true,
+        'cookie_samesite' => 'Lax',
+        'cache_expire' => 180,
+        'cache_limiter' => 'nocache',
     ];
 
     /**
-     * Start session
+     * Start the session with secure defaults (HttpOnly, SameSite, Secure on
+     * HTTPS, strict mode against session fixation).
      *
-     * @param array $options Array of options (see above)
-     * @return void
+     * @param array<string, mixed> $options
      */
-    public function config($options = [])
+    public static function config(array $options = []): void
     {
-        session_start(array_merge(self::$options, $options));
-        self::$session = &$_SESSION;
-    }
+        if (PHP_SAPI === 'cli' || session_status() === PHP_SESSION_ACTIVE) {
+            return;
+        }
 
-    /**
-     * Set value to session
-     *
-     * @param mixed $key
-     * @param mixed $value
-     * @return void
-     */
-    public function set($key, $value = null)
-    {
-        if (is_array($key)) {
-            foreach ($key as $key => $value) {
-                self::$session[$key] = $value;
-            }
-        } else {
-            self::$session[$key] = $value;
+        $options = array_merge(self::DEFAULTS, $options);
+
+        if (($options['cookie_samesite'] ?? '') === '') {
+            $options['cookie_samesite'] = 'Lax';
+        }
+        if (!array_key_exists('cookie_secure', $options)) {
+            $options['cookie_secure'] = Security::isSecure();
+        }
+
+        // Always forced: never accept unknown ids or ids passed in the URL.
+        $options['use_strict_mode'] = true;
+        $options['use_only_cookies'] = true;
+
+        if (!session_start($options)) {
+            throw new RuntimeException('Unable to start the session.');
         }
     }
 
     /**
-     * Set flash data
+     * Set one value, or several at once with an array.
      *
-     * @param mixed $key
-     * @param mixed $value
-     * @return void
+     * @param string|int|array<string|int, mixed> $key
      */
-    public function flash($key, $value = null)
+    public function set(string|int|array $key, mixed $value = null): void
     {
         if (is_array($key)) {
-            foreach ($key as $key => $value) {
-                self::$session[$key] = $value;
+            foreach ($key as $k => $v) {
+                $_SESSION[$k] = $v;
             }
-        } else {
-            self::$session[$key] = $value;
+
+            return;
         }
+
+        $_SESSION[$key] = $value;
     }
 
     /**
-     * Get value from session by specific key
+     * Set flash data (read it once with getFlash()).
      *
-     * @param mixed $key
-     * @param mixed $default Default value if key not exists
-     * @return mixed
+     * @param string|int|array<string|int, mixed> $key
      */
-    public function get($key, $default = null)
+    public function flash(string|int|array $key, mixed $value = null): void
     {
-        return self::has($key) ? self::$session[$key] : $default;
+        $this->set($key, $value);
     }
 
-    /**
-     * Get value by specific key and remove this key from session
-     *
-     * @param mixed $key
-     * @return mixed
-     */
-    public function getFlash($key)
+    public function get(string|int $key, mixed $default = null): mixed
     {
-        $value = self::get($key);
-        self::remove($key);
+        return $this->has($key) ? $_SESSION[$key] : $default;
+    }
+
+    /** Get a value and remove it from the session. */
+    public function getFlash(string|int $key): mixed
+    {
+        $value = $this->get($key);
+        $this->remove($key);
+
         return $value;
     }
 
-    /**
-     * Check if a specific key exists
-     *
-     * @param mixed $key
-     * @return boolean
-     */
-    public function has($key)
+    public function has(string|int $key): bool
     {
-        return array_key_exists($key, self::$session);
+        return array_key_exists($key, $_SESSION ?? []);
     }
 
-    /**
-     * Remove specific key
-     *
-     * @param mixed $key
-     * @return void
-     */
-    public function remove($key)
+    public function remove(string|int $key): void
     {
-        unset(self::$session[$key]);
+        unset($_SESSION[$key]);
     }
 
-    /**
-     * Clear session
-     *
-     * @return void
-     */
-    public function clear()
+    /** Empty the session, delete the cookie and destroy the session data. */
+    public function clear(): void
     {
-        session_unset();
+        $_SESSION = [];
+
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return;
+        }
+
+        if (ini_get('session.use_cookies') && !headers_sent()) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', [
+                'expires' => time() - 42000,
+                'path' => $params['path'],
+                'domain' => $params['domain'],
+                'secure' => $params['secure'],
+                'httponly' => $params['httponly'],
+                'samesite' => $params['samesite'] !== '' ? $params['samesite'] : 'Lax',
+            ]);
+        }
+
         session_destroy();
     }
 
-    /**
-     * Get and/or set the current session id
-     *
-     * @param string|null $id
-     * @return string|false
-     */
-    public function id($id = null)
+    /** Get the current session id, or set one (only before the session starts). */
+    public function id(?string $id = null): string|false
     {
-        return session_id($id);
+        return $id === null ? session_id() : session_id($id);
     }
 
     /**
-     * Update the current session id with a newly generated one
-     *
-     * @param boolean $deleteOldSession
-     * @return void
+     * Issue a new session id. Call this right after login / logout / privilege
+     * changes to prevent session fixation. The CSRF token is rotated as well.
      */
-    public function regenerate($deleteOldSession = false)
+    public function regenerate(bool $deleteOldSession = true): bool
     {
-        session_regenerate_id($deleteOldSession);
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return false;
+        }
+
+        unset($_SESSION['csrf']);
+
+        return session_regenerate_id($deleteOldSession);
     }
 }

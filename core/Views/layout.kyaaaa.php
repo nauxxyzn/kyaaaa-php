@@ -1,30 +1,58 @@
+<?php
+$segment = (string) (request()->getSegment(1) ?? '');
+
+// URL of a public asset with a cache-busting ?v= (file modification time).
+$asset = static function (string $file): string {
+    $path = defined('PUBLIC_PATH') ? PUBLIC_PATH . '/' . $file : '';
+    $version = ($path !== '' && is_file($path)) ? '?v=' . filemtime($path) : '';
+
+    return esc(url($file)) . $version;
+};
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $title; ?></title>
-    <link href="<?= url('assets/css') ?>/bootstrap.min.css" rel="stylesheet">
-    <script src="<?= url('assets/js') ?>/turbolinks.min.js"></script>
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="<?= esc($description ?? 'Kyaaaa-PHP is a small PHP 8.3 framework with a router, a safe query builder, sessions, CSRF protection and a mailer.') ?>">
+    <?= csrf()->metaTag() ?>
+    <title><?= esc($title ?? 'Kyaaaa-PHP') ?></title>
+    <script>try{var t=localStorage.getItem('kyaaaa-theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}</script>
+    <link href="<?= $asset('assets/css/bootstrap.min.css') ?>" rel="stylesheet">
+    <link href="<?= $asset('assets/css/kyaaaa.css') ?>" rel="stylesheet">
+    <script src="<?= $asset('assets/js/turbolinks.min.js') ?>"></script>
+    <script src="<?= $asset('assets/js/kyaaaa.js') ?>" defer></script>
 </head>
-<body class="bg-dark">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-        <div class="container">
-            <a href="/" class="navbar-brand h1">Kyaaaa</a>
-            <ul class="navbar-nav mr-auto">
-                <li class="nav-item">
-                    <a href="/docs" class="nav-link btn btn-light text-dark fw-bold px-4">Docs</a>
-                </li>
+<body class="k-body">
+    <a class="k-skip" href="#main">Skip to content</a>
 
-            </ul>
+    <header class="k-nav">
+        <div class="k-wrap k-nav-inner">
+            <a class="k-brand" href="<?= esc(url()) ?>" aria-label="Kyaaaa-PHP home">Kyaaaa<span>~</span></a>
+            <button class="k-burger" type="button" data-bs-toggle="collapse" data-bs-target="#kMenu" aria-controls="kMenu" aria-expanded="false" aria-label="Toggle menu"><span></span></button>
+            <nav class="collapse k-menu" id="kMenu" aria-label="Main">
+                <a href="<?= esc(url()) ?>"<?= $segment === '' ? ' aria-current="page"' : '' ?>>Home</a>
+                <a href="<?= esc(url('docs')) ?>"<?= $segment === 'docs' ? ' aria-current="page"' : '' ?>>Docs</a>
+                <a href="https://github.com/naufkia/kyaaaa-php" rel="noopener">GitHub</a>
+                <button class="k-theme" type="button" data-theme-toggle aria-label="Switch between light and dark theme"><span class="k-theme-dot"></span></button>
+            </nav>
         </div>
-    </nav>
-    <div class="container text-white">
-        <div class="row">
-            <?= $content; ?>
+    </header>
+
+    <main id="main"><?= $content /* already rendered HTML of the view */ ?></main>
+
+    <footer class="k-footer">
+        <div class="k-wrap k-footer-inner">
+            <span>Kyaaaa-PHP is open source (MIT). Take your coffee before you start.</span>
+            <nav aria-label="Footer">
+                <a href="<?= esc(url('docs')) ?>">Docs</a>
+                <a href="https://github.com/naufkia/kyaaaa-php" rel="noopener">GitHub</a>
+                <a href="https://nauf.space/donate" rel="noopener">Buy me a coffee</a>
+            </nav>
         </div>
-    </div>
-<script src="<?= url('assets/js') ?>/bootstrap.bundle.min.js"></script>
+    </footer>
+
+    <script src="<?= $asset('assets/js/bootstrap.bundle.min.js') ?>"></script>
 </body>
 </html>

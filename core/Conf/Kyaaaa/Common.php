@@ -1,261 +1,281 @@
 <?php
-$getConf = new \Core\Conf\App();
-date_default_timezone_set($getConf->app_timezone());
-$handler = new \Core\Conf\Kyaaaa\Handler\Run();
-if ($getConf->environment() == 'development') {
-    $handler->pushHandler(new \Core\Conf\Kyaaaa\Handler\Handler\KyaaaaDevelopmentHandler());
-} else {
-    $handler->pushHandler(new \Core\Conf\Kyaaaa\Handler\Handler\KyaaaaProductionHandler());
+
+declare(strict_types=1);
+
+use Core\Conf\Kyaaaa\Bootstrap;
+use Core\Conf\Kyaaaa\CSRF;
+use Core\Conf\Kyaaaa\DebugBar;
+use Core\Conf\Kyaaaa\Env;
+use Core\Conf\Kyaaaa\HttpException;
+use Core\Conf\Kyaaaa\Renderer;
+use Core\Conf\Kyaaaa\Request;
+use Core\Conf\Kyaaaa\Security;
+use Core\Conf\Kyaaaa\Session;
+
+/*
+ * Global helper functions. This file only defines functions, it has no side
+ * effects (the bootstrap lives in Core\Conf\Kyaaaa\Bootstrap).
+ */
+
+if (!function_exists('env')) {
+    /** Read a value from the environment / .env file (always a raw string). */
+    function env(string $key, ?string $default = null): ?string
+    {
+        return Env::get($key, $default);
+    }
 }
-$handler->register();
-$getConf->session();
 
-define('PUBLIC_PATH', $_SERVER['DOCUMENT_ROOT']);
+if (!function_exists('dd')) {
+    /** Dump variables and stop. Only works in development. */
+    function dd(mixed ...$vars): never
+    {
+        if (!Bootstrap::isDebug()) {
+            error_log('[kyaaaa] dd() was called outside development mode');
+            throw new HttpException(500, 'Debug helper used outside development mode');
+        }
 
-if ( !function_exists('dd') ) {
-    function dd($var) {
-        echo '<html><head><title>Kyaaaa~ Ge-debug!</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="background: #202124;font-size: 15px;"><div style="padding:10px;background:#b12776;margin-bottom:10px;color:#fff;max-width:1920px;font-weight:normal;font-family:Courier New;border-radius: 8px;font-size: 17px;letter-spacing: 1.8px;">Kyaaaa~ Ge-debug!</div><div style="margin-left: 25px;">';
-        foreach (func_get_args() as $var) {
-            if (is_array($var) || is_object($var)) {
-                ini_set("highlight.keyword", "#ff79c6;  font-weight: bolder");
-                ini_set("highlight.string", "#c1f953; font-weight: lighter; ");
-                ini_set("highlight.default", "#fff; font-weight: lighter; ");
-                ob_start();
-                highlight_string("<?php\r" . var_export($var, true) . " ?>");
-                $highlighted_output = ob_get_clean();
-                $highlighted_output = str_replace( ["&lt;?php","?&gt;"] , '', $highlighted_output );
-                echo $highlighted_output;
-            } else {
-                echo "<pre style='color: #fff;font-size: 15px;'>";
-                var_dump($var);
-                echo "</pre>";
-            }
+        while (ob_get_level() > 0 && @ob_end_clean()) {
+            // discard partial output
+        }
+
+        if (PHP_SAPI !== 'cli' && !headers_sent()) {
+            header('Content-Type: text/html; charset=UTF-8');
+        }
+
+        echo '<html><head><title>Kyaaaa~ Ge-debug!</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>'
+            . '<body style="background:#202124;font-size:15px"><div style="padding:10px;background:#b12776;margin-bottom:10px;color:#fff;'
+            . 'max-width:1920px;font-family:Courier New;border-radius:8px;font-size:17px;letter-spacing:1.8px">Kyaaaa~ Ge-debug!</div>'
+            . '<div style="margin-left:25px">';
+
+        foreach ($vars as $var) {
+            ob_start();
+            var_dump($var);
+            $dump = (string) ob_get_clean();
+            echo '<pre style="color:#fff;font-size:15px;white-space:pre-wrap">'
+                . htmlspecialchars($dump, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</pre>';
         }
 
         echo '</div></body></html>';
-        die;
+        exit(1);
     }
 }
 
-if( !function_exists('esc') ) {
-    function esc($str, $entities = true) {
-        if ($entities == false ) {
-            $str = htmlspecialchars($str, ENT_QUOTES);
-            $str = str_replace("&", "&amp;", $str);
-            $str = str_replace(":", "&#58;", $str);
-            $str = str_replace(";", "&#59;", $str);
-            $str = str_replace("/", "&#47;", $str);
-            $str = str_replace(">", "&#62;", $str);
-            $str = str_replace("<", "&#60;", $str);
-            $str = str_replace("'", "&#39;", $str);
-            $str = str_replace("\"", "&quot;", $str);
-            $str = str_replace("-", "&#45;", $str);
-            $str = str_replace("_", "&#95;", $str);
-            $str = str_replace("=", "&#61;", $str);
-            $str = str_replace("(", "&#40;", $str);
-            $str = str_replace(")", "&#41;", $str);
-            $str = str_replace('document.cookie', '[cleanxss]', strtolower($str));
-            $str = str_replace('document.domain', '[cleanxss]', strtolower($str));
-            $str = str_replace('document.write', '[cleanxss]', strtolower($str));
-            $str = str_replace('.parentNode', '[cleanxss]', strtolower($str));
-            $str = str_replace('.innerHTML', '[cleanxss]', strtolower($str));
-            $str = str_replace('<![CDATA[', '&lt;![CDATA[', strtolower($str));
-            $str = str_replace('<comment>', '&lt;comment&gt;', strtolower($str));
-            $str = str_replace('<script>', '&#60;script&#62;', strtolower($str));
-            $str = str_replace('<!--', '&lt;!--', $str);
-            $str = str_replace('-->', '--&gt;', $str);
-        } else {
-            $str = htmlspecialchars($str, ENT_QUOTES);
-        }
-        return $str;
+if (!function_exists('dbg')) {
+    /**
+     * Send a value to the "Log" tab of the development toolbar and hand it back,
+     * so it can be dropped into an expression: $user = dbg($model->find($id), 'user');
+     * Does nothing outside development. Sensitive keys (password, token, ...) are masked.
+     */
+    function dbg(mixed $value, string $label = ''): mixed
+    {
+        DebugBar::log($value, $label);
+
+        return $value;
     }
 }
 
-if( !function_exists('view') ) {
-    function view($view, $data = []) {
-        $getView = new \Core\Conf\Kyaaaa\Renderer($view, $data);
-        return $getView->send();
+if (!function_exists('d')) {
+    function d(mixed ...$vars): never
+    {
+        dd(...$vars);
     }
 }
 
-if ( !function_exists('viewPath') ) {
-    function viewPath($view, $data = []) {
-        return __DIR__ . "/../../Views/$view.kyaaaa.php";
-    }
-}
-
-if ( !function_exists('d') ) {
-    function d($var) {
-        foreach (func_get_args() as $x) {
-            var_dump($x);
-        }
-        die;
-    }
-}
-
-if ( !function_exists('url') ) {
-    function url($segments = '') {
-        $url = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == "on") ? "https" : "http")."://".$_SERVER['HTTP_HOST'].str_replace(basename($_SERVER['SCRIPT_NAME']),"",$_SERVER['SCRIPT_NAME']);
-        if ($segments != '') {
-            return $url . $segments;
-        } else {
-            return $url;
+if (!function_exists('esc')) {
+    /**
+     * Escape output for HTML.
+     *
+     * $entities = true  : htmlspecialchars (default, use for text and "quoted" attributes)
+     * $entities = false : strict mode, every character except letters, digits,
+     *                     space , . _ - becomes a numeric entity
+     *
+     * @return string|array<mixed>
+     */
+    function esc(mixed $str, bool $entities = true): string|array
+    {
+        if (is_array($str)) {
+            return array_map(static fn(mixed $item): string|array => esc($item, $entities), $str);
         }
 
-    }
-}
+        $str = (is_scalar($str) || $str instanceof Stringable) ? (string) $str : '';
 
-if ( !function_exists('url') ) {
-    function url($segments = '') {
-        $url = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] == "on") ? "https" : "http")."://".$_SERVER['HTTP_HOST'].str_replace(basename($_SERVER['SCRIPT_NAME']),"",$_SERVER['SCRIPT_NAME']);
-        if ($segments != '') {
-            return $url . $segments;
-        } else {
-            return $url;
+        if ($entities) {
+            return htmlspecialchars($str, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
         }
 
+        $encoded = preg_replace_callback(
+            '/[^A-Za-z0-9 ,._-]/u',
+            static fn(array $m): string => '&#' . mb_ord($m[0], 'UTF-8') . ';',
+            $str
+        );
+
+        return $encoded ?? '';
     }
 }
 
-if ( !function_exists('getBrowser') ) {
-    function getBrowser($arr = false) {
-        $u_agent = $_SERVER['HTTP_USER_AGENT'];
-        $bname = 'Unknown';
-        $platform = 'Unknown';
-        $version = "";
-        if (preg_match('/linux/i', $u_agent)) {
-            $platform = 'linux';
-        } elseif (preg_match('/macintosh|mac os x/i', $u_agent)) {
-            $platform = 'mac';
-        } elseif (preg_match('/windows|win32/i', $u_agent)) {
+if (!function_exists('view')) {
+    /** Render core/Views/<view>.kyaaaa.php inside the layout and print it. */
+    function view(string $view, array $data = []): void
+    {
+        (new Renderer($view, $data))->send();
+    }
+}
+
+if (!function_exists('viewPath')) {
+    /** Absolute path of a view file (validated, cannot leave core/Views). */
+    function viewPath(string $view, array $data = []): string
+    {
+        return Renderer::resolve($view);
+    }
+}
+
+if (!function_exists('url')) {
+    /** Absolute URL of the application, optionally followed by a path. */
+    function url(string $segments = ''): string
+    {
+        return Security::baseUrl() . ltrim($segments, '/');
+    }
+}
+
+if (!function_exists('getBrowser')) {
+    /**
+     * Rough browser detection. The user agent is attacker controlled: escape it
+     * before printing it.
+     *
+     * @return string|array<string, string>
+     */
+    function getBrowser(bool $arr = false): string|array
+    {
+        $agent = substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 512);
+
+        $platform = 'unknown';
+        if (preg_match('/windows|win32/i', $agent) === 1) {
             $platform = 'windows';
+        } elseif (preg_match('/macintosh|mac os x/i', $agent) === 1) {
+            $platform = 'mac';
+        } elseif (preg_match('/linux|android/i', $agent) === 1) {
+            $platform = 'linux';
         }
-        if (preg_match('/MSIE/i', $u_agent) && !preg_match('/Opera/i', $u_agent)) {
-            $bname = 'Internet Explorer';
-            $ub = "IE";
-        } elseif (preg_match('/Firefox/i', $u_agent)) {
-            $bname = 'Mozilla Firefox';
-            $ub = "Firefox";
-        } elseif (preg_match('/Chrome/i', $u_agent)) {
-            $bname = 'Google Chrome';
-            $ub = "Chrome";
-        } elseif (preg_match('/Safari/i', $u_agent)) {
-            $bname = 'Apple Safari';
-            $ub = "Safari";
-        } elseif (preg_match('/Opera/i', $u_agent)) {
-            $bname = 'Opera';
-            $ub = "Opera";
-        } elseif (preg_match('/Netscape/i', $u_agent)) {
-            $bname = 'Netscape';
-            $ub = "Netscape";
-        }
-        $known = array('Version', $ub, 'other');
-        $pattern = '#(?<browser>' . join('|', $known) .
-            ')[/ ]+(?<version>[0-9.|a-zA-Z.]*)#';
-        if (!preg_match_all($pattern, $u_agent, $matches)) {
-        }
-        $i = count($matches['browser']);
-        if ($i != 1) {
-            if (strripos($u_agent, "Version") < strripos($u_agent, $ub)) {
-                $version = $matches['version'][0];
-            } else {
-                $version = $matches['version'][1];
+
+        $browsers = [
+            ['/MSIE|Trident/i', 'Internet Explorer', 'IE', 'MSIE|rv:'],
+            ['/OPR|Opera/i', 'Opera', 'Opera', 'OPR|Opera'],
+            ['/Firefox/i', 'Mozilla Firefox', 'Firefox', 'Firefox'],
+            ['/Chrome/i', 'Google Chrome', 'Chrome', 'Chrome'],
+            ['/Safari/i', 'Apple Safari', 'Safari', 'Version|Safari'],
+            ['/Netscape/i', 'Netscape', 'Netscape', 'Netscape'],
+        ];
+
+        $name = 'Unknown';
+        $short = 'Unknown';
+        $token = '';
+        foreach ($browsers as [$test, $longName, $shortName, $versionToken]) {
+            if (preg_match($test, $agent) === 1) {
+                $name = $longName;
+                $short = $shortName;
+                $token = $versionToken;
+                break;
             }
-        } else {
-            $version = $matches['version'][0];
         }
-        if ($version == null || $version == "") {
-            $version = "?";
+
+        if (!$arr) {
+            return $short;
         }
-        if ($arr == true) {
-            return array(
-                'userAgent' => $u_agent,
-                'name' => $bname,
-                'ver' => $version,
-                'platform' => $platform,
-                'pattern' => $pattern
-            );
-        } else {
-            return $ub;
+
+        $pattern = '~(?:' . ($token !== '' ? $token : 'Version') . ')[/ :]+([0-9][0-9.]*)~i';
+        $version = preg_match($pattern, $agent, $m) === 1 ? $m[1] : '?';
+
+        return [
+            'userAgent' => $agent,
+            'name' => $name,
+            'ver' => $version,
+            'platform' => $platform,
+            'pattern' => $pattern,
+        ];
+    }
+}
+
+if (!function_exists('session')) {
+    function session(): Session
+    {
+        return new Session();
+    }
+}
+
+if (!function_exists('request')) {
+    function request(): Request
+    {
+        return new Request();
+    }
+}
+
+if (!function_exists('csrf')) {
+    function csrf(bool $setExpired = true): CSRF
+    {
+        return new CSRF();
+    }
+}
+
+if (!function_exists('abort')) {
+    /** Stop with an HTTP error page, e.g. abort(404) or abort(403, 'No access'). */
+    function abort(int $status = 404, string $message = ''): never
+    {
+        throw new HttpException($status, $message);
+    }
+}
+
+if (!function_exists('redirectTo')) {
+    /**
+     * Redirect and stop. Relative paths ("/login", "dashboard") are resolved
+     * against the application URL. Absolute URLs are only accepted for the
+     * current host or hosts listed in App::redirect_hosts(), so user supplied
+     * targets (?next=...) cannot be abused for open redirects.
+     *
+     * @throws InvalidArgumentException when the target is not allowed
+     */
+    function redirectTo(string $url, ?int $code = null): never
+    {
+        if (is_numeric($url)) {
+            throw new InvalidArgumentException('URL cannot be numeric.');
         }
-    }
-}
-
-if (! function_exists('session')) {
-    function session() {
-        $session = new \Core\Conf\Kyaaaa\Session();
-        return $session;
-    }
-}
-
-if (! function_exists('request')) {
-    function request() {
-        $request = new \Core\Conf\Kyaaaa\Request();
-        return $request;
-    }
-}
-
-if (! function_exists('csrf')) {
-    function csrf($setExpired = true) {
-        $csrf = new \Core\Conf\Kyaaaa\CSRF();
-        return $csrf;
-    }
-}
-
-if ( !function_exists('redirectTo')) {
-    function redirectTo($url, $code = null): void {
-        if (!headers_sent()) {
-            if(is_numeric($url)) {
-                throw new Exception("URL Cannot be a numeric");
-            }
-            $parseUrl = parse_url($url);
-            if (array_key_exists('scheme', $parseUrl)) {
-                if (getBrowser() == 'Safari') {
-                    $host = $parseUrl['scheme'] . '://' . $parseUrl['host'];
-                    if (array_key_exists('path', $parseUrl)) {
-                        $path = $parseUrl['path'];
-                        $query = '?' . $parseUrl['query'];
-                        header('Location: ' . $host . rawurldecode($path));
-                    } else if (array_key_exists('query', $parseUrl)) {
-                        $path = $parseUrl['path'];
-                        $query = '?' . $parseUrl['query'];
-                        header('Location: ' . $host . rawurldecode($path) . rawurldecode($query));
-                    } else {
-                        header('Location: ' . $host);
-                    }
-                } else {
-                    if ($code == NULL) {
-                        switch ($code) {
-                            case 301:
-                                $code = '301 Moved Permanently';
-                                break;
-                            case 302:
-                                $code = '302 Moved Temporarily';
-                                break;
-                            case 303:
-                                $code = '303 See Other';
-                                break;
-                            default:
-                                $code = '303 See Other';
-                                break;
-                        }
-                    }
-                    header( 'HTTP/1.1 ' . $code);
-                    header( 'Location: ' . $url);
-                    echo '<script>';
-                    echo 'window.location.href="' . $url . '";';
-                    echo '</script>';
-                    echo '<noscript>';
-                    echo '<meta http-equiv="refresh" content="0;url=' . $url . '">';
-                    echo '</noscript>';
-                    exit;
-                }
-            } else {
-                throw new Exception("URL Invalid: URL Doesn't have scheme http or https");
-            }
-        } else {
-            throw new Exception("Headers already sent.");
+        if (headers_sent()) {
+            throw new RuntimeException('Headers already sent.');
         }
+
+        $target = Security::safeRedirectTarget($url);
+        $code = in_array($code, [301, 302, 303, 307, 308], true) ? $code : 303;
+
+        header('Location: ' . $target, true, $code);
+        header('Content-Type: text/html; charset=UTF-8');
+
+        $safe = esc($target);
+        echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Redirecting…</title></head><body>'
+            . 'Redirecting to <a href="' . $safe . '">' . $safe . '</a></body></html>';
+        exit;
     }
 }
 
+if (!function_exists('redirectExternal')) {
+    /**
+     * Redirect to an external http(s) URL (payment page, OAuth provider, ...).
+     * Only use it with URLs that come from your own code or a trusted API,
+     * NEVER with user input.
+     */
+    function redirectExternal(string $url, ?int $code = null): never
+    {
+        $url = trim((string) preg_replace('/[\x00-\x1F\x7F]+/', '', $url));
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $host = (string) parse_url($url, PHP_URL_HOST);
+
+        if (($scheme !== 'http' && $scheme !== 'https') || $host === '' || str_contains($url, '\\')) {
+            throw new InvalidArgumentException('Invalid external URL.');
+        }
+        if (headers_sent()) {
+            throw new RuntimeException('Headers already sent.');
+        }
+
+        $code = in_array($code, [301, 302, 303, 307, 308], true) ? $code : 302;
+        header('Location: ' . $url, true, $code);
+        exit;
+    }
+}

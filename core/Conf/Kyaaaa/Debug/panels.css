@@ -1,0 +1,50 @@
+/* Shared by the debug toolbar and the error page. Colours come from the container (--bg, --panel, ...). */
+.kd { color: var(--ink); font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.kd h3 { margin: 22px 0 8px; color: var(--yellow); font-size: 13px; font-weight: 800; }
+.kd h3:first-child { margin-top: 0; }
+.kd p { margin: 0 0 10px; }
+.kd b { font-weight: 800; }
+.kd .empty { color: var(--muted); font-style: italic; }
+.kd .muted { color: var(--muted); }
+.kd .err-text { margin: 8px 0 0; color: var(--red); font-weight: 700; }
+.kd code, .kd pre { font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+.kd code { color: var(--ink); }
+.kd pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.kd table { width: 100%; border-collapse: collapse; }
+.kd th, .kd td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.kd th { color: var(--muted); font-weight: 700; white-space: nowrap; }
+.kd .kv th { width: 26%; }
+.kd thead th { background: var(--panel); color: var(--ink); }
+.kd .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.kd tr.is-hit th, .kd tr.is-hit td { background: rgba(255, 61, 139, .18); }
+
+.kd .pill { display: inline-block; padding: 0 8px; border: 1.5px solid currentColor; border-radius: 999px; font-size: 11px; font-weight: 800; line-height: 18px; white-space: nowrap; }
+.kd .pill.ok { color: var(--mint); }
+.kd .pill.warn { color: var(--yellow); }
+.kd .pill.err { color: var(--red); }
+.kd .pill.dim { color: var(--muted); }
+.kd .pill.pink { color: var(--pink); }
+
+.kd details { margin: 0 0 10px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--panel); }
+.kd summary { padding: 8px 12px; font-weight: 700; cursor: pointer; }
+.kd details > :not(summary) { margin: 0 12px 10px; width: auto; }
+.kd details > table { width: calc(100% - 24px); }
+
+.kd .query { margin: 0 0 10px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--panel); }
+.kd .query-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1.5px solid var(--line); }
+.kd .query-body { padding: 10px 12px; }
+.kd .query-body details { margin: 10px 0 0; background: var(--bg); }
+.kd .sql { padding: 10px 12px; border-radius: 8px; background: var(--code); color: var(--ink); }
+.kd .sql .kw { color: var(--pink); font-weight: 700; }
+.kd .copy { margin-left: auto; padding: 2px 10px; border: 1.5px solid var(--line); border-radius: 999px; background: transparent; color: var(--ink); font: 700 11px/18px system-ui, sans-serif; cursor: pointer; }
+.kd .copy:hover { border-color: var(--yellow); background: var(--yellow); color: #1b1340; }
+
+.kd .bar { display: flex; height: 16px; overflow: hidden; border: 1.5px solid var(--line); border-radius: 8px; background: var(--panel); }
+.kd .bar i { display: block; height: 100%; }
+.kd .seg-db { background: var(--pink); }
+.kd .seg-view { background: var(--yellow); }
+.kd .seg-app { background: var(--mint); }
+.kd .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 0; color: var(--muted); }
+.kd .legend b { color: var(--ink); }
+.kd .dot { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; }

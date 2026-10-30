@@ -1,119 +1,151 @@
-<?php namespace Core\Conf\Kyaaaa;
+<?php
 
-use Core\Conf\Exception;
-use Core\Conf\PDOException;
+declare(strict_types=1);
 
-class Connection {
-    public function __construct() {
-        $getConfig = new \Core\Conf\Database();
-        $this->driver = $getConfig->config()['driver'];
-        $this->username = $getConfig->config()['username'];
-        $this->password = $getConfig->config()['password'];
-        $this->database = $getConfig->config()['database'];
-        $this->host = $getConfig->config()['host'];
-        $this->port = $getConfig->config()['port'];
-        $this->sqlite_path = $getConfig->config()['sqlite_path'];
-        $this->charset = 'utf8';
-    }
-    /**
-     *	@var object $connect, Holds the PDO connection object
-     */
-    private $connect = null;
+namespace Core\Conf\Kyaaaa;
+
+use InvalidArgumentException;
+use PDO;
+use PDOException;
+use RuntimeException;
+
+class Connection
+{
+    private ?PDO $connect = null;
+
+    /** @var array<string, mixed> */
+    private array $config;
 
     /**
-     *	@var array $options, PDO mysql configuration options
+     * @param array<string, mixed>|null $config defaults to \Core\Conf\Database::config()
      */
-    private $options = [
-        \PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES UTF8',
-    ];
-
-    /**
-     *	@throws PDOException
-     *	@throws Exception
-     */
-    public function PDO ($driver = null)
+    public function __construct(?array $config = null)
     {
-        if ($driver !== null) {
-            $this->driver = strtolower($driver);
+        $this->config = $config ?? (new \Core\Conf\Database())->config();
+    }
+
+    /**
+     * Open (once) and return the PDO connection.
+     *
+     * @throws RuntimeException when the connection fails. Connection details
+     *         (host, user, ...) are logged but never put in the exception message.
+     */
+    public function PDO(?string $driver = null): PDO
+    {
+        if ($this->connect !== null && $driver === null) {
+            return $this->connect;
         }
+
+        $driver = strtolower($driver ?? (string) ($this->config['driver'] ?? 'mysql'));
 
         try {
+            $this->connect = match ($driver) {
+                'mysql' => $this->connectMySQL(),
+                'pgsql' => $this->connectPostgreSQL(),
+                'sqlsrv' => $this->connectSQLServer(),
+                'sqlite' => $this->connectSQLite(),
+                default => throw new InvalidArgumentException('Unsupported database driver.'),
+            };
+        } catch (PDOException $e) {
+            error_log('[kyaaaa] Database connection failed: ' . str_replace(["\r", "\n"], ' ', $e->getMessage()));
 
-            if ($this->driver === 'mysql') {
-                $this->connectMySQl();
-            } elseif ($this->driver === 'pgsql') {
-                $this->connectPostgreSQl();
-            } elseif ($this->driver === 'sqlsrv') {
-                $this->connectSQlServer();
-            } elseif ($this->driver === 'sqlite') {
-                $this->connectSQlite();
-            }
-
-        } catch(\PDOException $e) {
-            $getConf = new \Core\Conf\App();
-            $handler = new \Core\Conf\Kyaaaa\Handler\Run();
-            $handler->allowQuit(false);
-            $handler->writeToOutput(false);
-            if ($getConf->environment() == 'development') {
-                $handler->pushHandler(new \Core\Conf\Kyaaaa\Handler\Handler\KyaaaaDevelopmentHandler());
-            } else {
-                $handler->pushHandler(new \Core\Conf\Kyaaaa\Handler\Handler\KyaaaaProductionHandler());
-            }
-            $html = $handler->handleException($e);
+            throw new RuntimeException('Database connection failed.', 0, Bootstrap::isDebug() ? $e : null);
         }
+
         return $this->connect;
     }
 
     /**
-     *	Set common PDO attributes
+     * @return array<int, mixed>
      */
-    private function setAttributes ()
+    private function options(): array
     {
-        $this->connect->setAttribute(\PDO::ATTR_EMULATE_PREPARES, false);
-        $this->connect->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
-        $this->connect->setAttribute(\PDO::ATTR_DEFAULT_FETCH_MODE, \PDO::FETCH_OBJ);
-        $this->connect->setAttribute(\PDO::ATTR_CASE, \PDO::CASE_NATURAL);
+        return [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_OBJ,
+            PDO::ATTR_CASE => PDO::CASE_NATURAL,
+            PDO::ATTR_STRINGIFY_FETCHES => false,
+        ];
     }
 
-    /**
-     *	Connect PDO to MySQl database
-     *	@return void
-     */
-    private function connectMySQl ()
+    private function value(string $key, string $default = ''): string
     {
-        $this->connect = new \PDO("mysql:host={$this->host};port={$this->port};dbname={$this->database};charset={$this->charset}", $this->username, $this->password, $this->options);
-        $this->setAttributes();
+        $value = (string) ($this->config[$key] ?? $default);
+
+        // DSN values are separated by ";", so they must never contain one.
+        if (preg_match('/[;\x00-\x1F]/', $value) === 1) {
+            throw new InvalidArgumentException("Invalid database setting: {$key}.");
+        }
+
+        return $value;
     }
 
-    /**
-     *	Connect PDO to PostgreSQl database
-     *	@return void
-     */
-    private function connectPostgreSQl ()
+    private function connectMySQL(): PDO
     {
-        $this->connect = new \PDO("pgsql:host={$this->host};port={$this->port};dbname={$this->database}", $this->username, $this->password);
-        $this->setAttributes();
+        $charset = $this->value('charset', 'utf8mb4');
+        if (preg_match('/^[A-Za-z0-9_]+$/', $charset) !== 1) {
+            throw new InvalidArgumentException('Invalid database charset.');
+        }
+
+        $options = $this->options() + [PDO::ATTR_EMULATE_PREPARES => false];
+
+        $ca = (string) ($this->config['ssl_ca'] ?? '');
+        if ($ca !== '') {
+            // PDO::MYSQL_ATTR_* moved to Pdo\Mysql in newer PHP versions.
+            $constant = defined('Pdo\Mysql::ATTR_SSL_CA') ? 'Pdo\Mysql::ATTR_SSL_CA' : 'PDO::MYSQL_ATTR_SSL_CA';
+            $options[constant($constant)] = $ca;
+        }
+
+        $dsn = sprintf(
+            'mysql:host=%s;port=%d;dbname=%s;charset=%s',
+            $this->value('host', '127.0.0.1'),
+            (int) ($this->config['port'] ?? 3306),
+            $this->value('database'),
+            $charset
+        );
+
+        return new PDO($dsn, (string) ($this->config['username'] ?? ''), (string) ($this->config['password'] ?? ''), $options);
     }
 
-    /**
-     *	Connect PDO to SQl Server database
-     *	@return void
-     */
-    private function connectSQlServer ()
+    private function connectPostgreSQL(): PDO
     {
-        $this->connect = new \PDO("sqlsrv:Server=".$this->host.";Connection=".$this->database."", $this->username, $this->password);
-        $this->setAttributes();
+        $dsn = sprintf(
+            'pgsql:host=%s;port=%d;dbname=%s',
+            $this->value('host', '127.0.0.1'),
+            (int) ($this->config['port'] ?? 5432),
+            $this->value('database')
+        );
+
+        return new PDO(
+            $dsn,
+            (string) ($this->config['username'] ?? ''),
+            (string) ($this->config['password'] ?? ''),
+            $this->options() + [PDO::ATTR_EMULATE_PREPARES => false]
+        );
     }
 
-    /**
-     *	Connect PDO to SQlite embedded database
-     *	@return void
-     */
-    private function connectSQlite ()
+    private function connectSQLServer(): PDO
     {
-        $this->connect = new \PDO("sqlite:".$this->sqlite_path);
-        $this->setAttributes();
+        $dsn = sprintf(
+            'sqlsrv:Server=%s,%d;Database=%s',
+            $this->value('host', '127.0.0.1'),
+            (int) ($this->config['port'] ?? 1433),
+            $this->value('database')
+        );
+
+        return new PDO($dsn, (string) ($this->config['username'] ?? ''), (string) ($this->config['password'] ?? ''), $this->options());
+    }
+
+    private function connectSQLite(): PDO
+    {
+        $path = (string) ($this->config['sqlite_path'] ?? '');
+        if ($path === '' || str_contains($path, "\0")) {
+            throw new InvalidArgumentException('sqlite_path is required for the sqlite driver.');
+        }
+
+        $pdo = new PDO('sqlite:' . $path, null, null, $this->options());
+        $pdo->exec('PRAGMA foreign_keys = ON');
+
+        return $pdo;
     }
 }
-
-?>

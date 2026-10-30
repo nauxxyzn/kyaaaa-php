@@ -1,151 +1,197 @@
-<?php namespace Core\Conf\Kyaaaa;
+<?php
+
+declare(strict_types=1);
+
+namespace Core\Conf\Kyaaaa;
+
+use InvalidArgumentException;
 
 class Router
 {
-    private ?string $_url;
-    private array $routes;
-    private array $_nameRoute;
-    private string $baseRoute;
+    /** @var array<string, list<Route>> */
+    private array $routes = [];
 
-    function __construct()
+    /** @var array<string, Route> */
+    private array $nameRoute = [];
+
+    private string $baseRoute = '';
+    private string $path;
+    private string $method;
+
+    public function __construct()
     {
-        $this->baseRoute = '';
-        $this->routes = [];
-        $this->_nameRoute = [];
-        $this->_url = $_SERVER['REQUEST_URI'];
-        $this->namespace = "";
+        require_once __DIR__ . '/Common.php';
+        Bootstrap::boot();
+
+        $this->path = self::requestPath();
+        $this->method = self::requestMethod();
     }
 
-    /**
-     * GET method
-     * @param string $path
-     * @param $callable
-     * @param string|null $name
-     * @return Route
-     */
-    function get(string $path, $callable, ?string $name = null): Route
+    public function get(string $path, mixed $callable, ?string $name = null): Route
     {
         return $this->add($path, $callable, 'GET', $name);
     }
 
-    /**
-     * POST method
-     * @param string $path
-     * @param  $callable
-     * @param string|null $name
-     * @return Route
-     */
-    function post(string $path, $callable, ?string $name = null): Route
+    public function post(string $path, mixed $callable, ?string $name = null): Route
     {
         return $this->add($path, $callable, 'POST', $name);
     }
 
-    /**
-     * DELETE method
-     * @param string $path
-     * @param $callable
-     * @param string|null $name
-     * @return Route
-     */
-    function delete(string $path, $callable, ?string $name = null): Route
-    {
-        return $this->add($path, $callable, 'DELETE', $name);
-    }
-
-    /**
-     * PUT method
-     * @param string $path
-     * @param $callable
-     * @param string|null $name
-     * @return Route
-     */
-    function put(string $path, $callable, ?string $name = null): Route
+    public function put(string $path, mixed $callable, ?string $name = null): Route
     {
         return $this->add($path, $callable, 'PUT', $name);
     }
 
-    /**
-     * @param string $base_route
-     * @param callable $callable
-     */
-    function group(string $base_route, callable $callable): void
+    public function patch(string $path, mixed $callable, ?string $name = null): Route
     {
-        $cur_base_route = $this->baseRoute;
+        return $this->add($path, $callable, 'PATCH', $name);
+    }
+
+    public function delete(string $path, mixed $callable, ?string $name = null): Route
+    {
+        return $this->add($path, $callable, 'DELETE', $name);
+    }
+
+    public function group(string $base_route, callable $callable): void
+    {
+        $current = $this->baseRoute;
         $this->baseRoute .= $base_route;
-        call_user_func($callable);
-        $this->baseRoute = $cur_base_route;
+
+        try {
+            $callable($this);
+        } finally {
+            $this->baseRoute = $current;
+        }
     }
 
     /**
-     * @param string $path
-     * @param $callable $callable
-     * @param string|null $name
-     * @param string $method
-     * @return Route
+     * Path of a named route, e.g. url('item', ['id' => 5]).
+     *
+     * @param array<string, scalar> $params
      */
-    private function add(string $path, $callable, string $method, ?string $name = null): Route
+    public function url(string $name, array $params = []): string
     {
-        $path = $this->baseRoute . '/' . trim($path, '/');
-        $path = $this->baseRoute ? rtrim($path, '/') : $path;
+        if (!isset($this->nameRoute[$name])) {
+            throw new InvalidArgumentException("No route named '{$name}'.");
+        }
 
-        $route = new Route($path, $callable);
+        return $this->nameRoute[$name]->getUrl($params);
+    }
+
+    /**
+     * Dispatch the request. Unknown paths give a 404, known paths with another
+     * method a 405, and exceptions go to the ErrorHandler (nothing is echoed
+     * from here).
+     */
+    public function run(): mixed
+    {
+        if (DebugBar::enabled()) {
+            DebugBar::routes($this->describeRoutes());
+        }
+
+        foreach ($this->routes[$this->method] ?? [] as $route) {
+            if ($route->match($this->path)) {
+                if (DebugBar::enabled()) {
+                    DebugBar::route($route->describe($this->method));
+                    DebugBar::mark('Route matched');
+                }
+
+                return $route->call();
+            }
+        }
+
+        $allowed = [];
+        foreach ($this->routes as $method => $routes) {
+            foreach ($routes as $route) {
+                if ($route->test($this->path)) {
+                    $allowed[] = $method;
+                    break;
+                }
+            }
+        }
+
+        if ($allowed !== []) {
+            if (in_array('GET', $allowed, true)) {
+                $allowed[] = 'HEAD';
+            }
+
+            throw new HttpException(405, 'Method Not Allowed', ['Allow' => implode(', ', array_unique($allowed))]);
+        }
+
+        throw new HttpException(404, 'Not Found');
+    }
+
+    /**
+     * @return list<array{method: string, path: string, handler: string}>
+     */
+    private function describeRoutes(): array
+    {
+        $list = [];
+        foreach ($this->routes as $method => $routes) {
+            foreach ($routes as $route) {
+                $info = $route->describe($method);
+                $list[] = ['method' => $method, 'path' => $info['path'], 'handler' => $info['handler']];
+            }
+        }
+
+        return $list;
+    }
+
+    private function add(string $path, mixed $callable, string $method, ?string $name = null): Route
+    {
+        $route = new Route($this->baseRoute . '/' . trim($path, '/'), $callable);
         $this->routes[$method][] = $route;
 
-        if (is_string($callable) && $name == null) {
+        if ($name === null && is_string($callable)) {
             $name = $callable;
         }
-
-        if ($name) {
-            $this->_nameRoute[$name] = $route;
+        if ($name !== null) {
+            $this->nameRoute[$name] = $route;
         }
+
         return $route;
     }
 
     /**
-     * @param string $name
-     * @param array $params
-     * @return string
+     * Request path without query string, duplicate slashes and the directory
+     * the application is installed in.
      */
-    function url(string $name, array $params = []): string
+    private static function requestPath(): string
     {
-        try {
-            if (!isset($this->_nameRoute[$name])) {
-                throw new \Exception('No route match');
+        $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
+
+        foreach (['?', '#'] as $delimiter) {
+            $pos = strpos($uri, $delimiter);
+            if ($pos !== false) {
+                $uri = substr($uri, 0, $pos);
             }
-            return $this->_nameRoute[$name]->geturl($params);
-        } catch (\Exception $ex) {
-            return $ex->getMessage();
         }
+
+        $path = (string) preg_replace('~/{2,}~', '/', $uri);
+
+        $base = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/index.php'))), '/');
+        if ($base !== '' && $base !== '.' && ($path === $base || str_starts_with($path, $base . '/'))) {
+            $path = substr($path, strlen($base));
+        }
+
+        return $path === '' ? '/' : $path;
     }
 
     /**
-     * @return mixed
+     * HTML forms can only send GET/POST: a POST body field "_method" may carry
+     * PUT, PATCH or DELETE. Query strings and headers are never used for this.
      */
-    function run()
+    private static function requestMethod(): string
     {
-        error_reporting(0);
-        require_once __DIR__ . "/Common.php";
+        $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 
-        try {
-            if (!isset($this->routes[$_SERVER['REQUEST_METHOD']])) {
-                throw new \Exception('Request method is not defined ');
+        if ($method === 'POST' && isset($_POST['_method']) && is_string($_POST['_method'])) {
+            $override = strtoupper($_POST['_method']);
+            if (in_array($override, ['PUT', 'PATCH', 'DELETE'], true)) {
+                $method = $override;
             }
-            $routesRequestMethod = $this->routes[$_SERVER['REQUEST_METHOD']];
-            $i = 0;
-            foreach ($routesRequestMethod as $route) {
-                if ($route->match($this->_url)) {
-                    return $route->call();
-                } else {
-                    $i++;
-                }
-            }
-            if (count($routesRequestMethod) === $i) {
-                header($_SERVER['SERVER_PROTOCOL'] . ' 404 Not Found');
-                echo '<html><head><title>Kyaaaa~ 404 !</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="background: #202124;font-size: 15px;"><div style="padding:10px;background:#b12776;margin:0 auto;color:#fff;max-width:768px;font-weight:normal;font-family:Courier New;border-radius: 8px;font-size: 17px;letter-spacing: 1.8px;text-align: center;margin-top: 50px">'.http_response_code().': Not Found</div><div style="margin-left: 25px;"></div></body></html>';
-                exit;
-            }
-        } catch (\Exception $ex) {
-            echo $ex->getMessage();
         }
+
+        return $method === 'HEAD' ? 'GET' : $method;
     }
 }
